@@ -9,7 +9,8 @@ def test_web_app_loads_without_exceptions():
     assert not result.exception
     assert result.title[0].value == "BPSD XML–YOLO Aligner"
     assert [tab.label for tab in result.tabs] == [
+        "Run alignment",
         "Inspect CSV",
-        "Combine XML + YOLO",
+        "Advanced combine",
         "CLI guide",
     ]

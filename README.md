@@ -28,6 +28,11 @@ or human review.
   scan-only and cross-system cases.
 - Keep confirmed, candidate, unresolved, and scan-only results
   distinguishable during review.
+- Upload one raw score page through the website and run the same alignment
+  pipeline without preparing intermediate CSV files first.
+- Export a single `all_information.csv` containing every YOLO row, every
+  extracted MusicXML event, and every flattened source XML node.
+- Draw all YOLO boxes and alignment labels back onto full-page review images.
 
 ## Evidence and review rules
 
@@ -112,10 +117,38 @@ Start the website locally with:
 bpsd-aligner web
 ```
 
-The website can inspect a combined CSV or combine an existing YOLO/BPS master
-with the lossless MusicXML event export. Dataset-wide raw alignment remains
-available through the CLI because source score collections can be too large
-for ordinary browser uploads.
+Open the local URL shown by Streamlit, normally `http://localhost:8501`.
+
+The **Run alignment** tab accepts one score page per run:
+
+1. score image (`.jpg`, `.jpeg`, or `.png`);
+2. matching YOLO annotation (`.txt`);
+3. BPSD written/repetition MusicXML (`.xml` or `.musicxml`);
+4. BPSD `ann_score_note.csv`;
+5. YOLO `notes.json` class map; and
+6. optionally, unfolded MusicXML for a score containing repeats.
+
+Set **MusicXML page** to the page represented by the uploaded image, then click
+**Align all information**. The page reports each stage as it runs and keeps a
+completed job in the current Streamlit session, so an ordinary UI rerun with
+the same files reuses the in-memory result.
+
+The website returns:
+
+- `all_information.csv`: every YOLO row, MusicXML event, and raw XML node;
+- `combined_master.csv`: BPS-OMR-oriented YOLO and MusicXML event rows;
+- `alignment_detailed.csv`: box-level matching evidence and confidence;
+- full-page dynamics, fingering, and all-symbol review overlays;
+- validation JSON and a ZIP containing all generated outputs.
+
+Use `source_record_type` in `all_information.csv` to distinguish `yolo`,
+`xml_event`, and `xml_node` rows. Machine-generated fingering links are still
+candidates and must be checked in the overlay. Classes without a supported
+MusicXML matching rule remain in the CSV with unresolved semantic fields
+instead of being discarded.
+
+Dataset-wide raw alignment remains available through the resumable CLI because
+source score collections can be too large for ordinary browser uploads.
 
 ## Run the alignment
 
@@ -240,6 +273,7 @@ python -m pytest -v
 ├── bpsd_aligner
 │   ├── cli.py
 │   ├── web.py
+│   ├── web_pipeline.py
 │   └── web_utils.py
 ├── bps_xml_alignment.py
 ├── combine_yolo_xml.py

@@ -9,7 +9,8 @@ MusicXML/BPSD semantics:
   with the nearest rendered MusicXML/BPSD note and are explicitly marked as
   inferred.
 
-Nothing in this module is connected to the Streamlit application.
+The Streamlit application calls :func:`run_alignment`; CLI and web therefore
+share the same alignment logic.
 """
 
 from __future__ import annotations
