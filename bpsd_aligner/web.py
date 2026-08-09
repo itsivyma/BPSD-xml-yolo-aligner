@@ -74,6 +74,13 @@ def _render_completed_job(job: dict) -> None:
         overlay_names = list(overlays)
         selected = st.selectbox("Overlay", overlay_names, key="overlay_select")
         st.image(overlays[selected], caption=selected, use_container_width=True)
+        st.download_button(
+            "Download selected full-resolution overlay",
+            overlays[selected],
+            f"{selected}.png",
+            "image/png",
+            use_container_width=True,
+        )
     else:
         st.info("No review overlay was generated for this input.")
     st.caption(
@@ -101,37 +108,80 @@ def _render_completed_job(job: dict) -> None:
         else:
             st.success("No machine-generated rows are marked for review.")
 
-    st.subheader("Download results")
-    columns = st.columns(5)
-    columns[0].download_button(
-        "All-information CSV",
-        job["all_information"],
-        "all_information.csv",
+    st.subheader("Primary CSV outputs")
+    primary = st.columns(3)
+    primary[0].download_button(
+        "1. Aligned YOLO CSV",
+        job["yolo_aligned"],
+        "yolo_aligned.csv",
         "text/csv",
         use_container_width=True,
     )
-    columns[1].download_button(
-        "Combined event CSV",
-        job["combined_master"],
-        "combined_master.csv",
+    primary[1].download_button(
+        "2. XML events CSV",
+        job["xml_events"],
+        "xml_events.csv",
         "text/csv",
         use_container_width=True,
     )
-    columns[2].download_button(
+    primary[2].download_button(
+        "3. YOLO + XML timeline",
+        job["timeline"],
+        "yolo_xml_timeline.csv",
+        "text/csv",
+        use_container_width=True,
+    )
+    st.caption(
+        "The timeline keeps every YOLO and XML-event row and interleaves them "
+        "by start/end time. Use source_record_type to filter either source."
+    )
+
+    st.subheader("Supporting outputs")
+    support_first = st.columns(3)
+    support_first[0].download_button(
+        "Review queue CSV",
+        job["review_queue"],
+        "review_queue.csv",
+        "text/csv",
+        use_container_width=True,
+    )
+    support_first[1].download_button(
         "Detailed YOLO CSV",
         job["detailed_csv"],
         "alignment_detailed.csv",
         "text/csv",
         use_container_width=True,
     )
-    columns[3].download_button(
+    support_first[2].download_button(
+        "Raw XML nodes CSV",
+        job["xml_nodes"],
+        "xml_nodes.csv",
+        "text/csv",
+        use_container_width=True,
+    )
+    support_second = st.columns(3)
+    support_second[0].download_button(
+        "All-information CSV",
+        job["all_information"],
+        "all_information.csv",
+        "text/csv",
+        use_container_width=True,
+    )
+    support_second[1].download_button(
+        "Linked combined CSV",
+        job["combined_master"],
+        "combined_master.csv",
+        "text/csv",
+        use_container_width=True,
+    )
+    support_second[2].download_button(
         "Validation JSON",
         job["validation_json"],
         "validation_report.json",
         "application/json",
         use_container_width=True,
     )
-    columns[4].download_button(
+    st.download_button(
         "All outputs ZIP",
         job["output_zip"],
         "bpsd_alignment_outputs.zip",
@@ -259,6 +309,11 @@ with align_tab:
                             st.session_state["raw_alignment_job"] = {
                                 "fingerprint": fingerprint,
                                 "report": report,
+                                "yolo_aligned": output_paths["yolo_aligned_csv"].read_bytes(),
+                                "review_queue": output_paths["review_queue_csv"].read_bytes(),
+                                "xml_events": output_paths["xml_events_csv"].read_bytes(),
+                                "xml_nodes": output_paths["xml_nodes_csv"].read_bytes(),
+                                "timeline": output_paths["yolo_xml_timeline_csv"].read_bytes(),
                                 "all_information": output_paths["all_information_csv"].read_bytes(),
                                 "combined_master": output_paths["combined_master_csv"].read_bytes(),
                                 "detailed_csv": output_paths["detailed_csv"].read_bytes(),

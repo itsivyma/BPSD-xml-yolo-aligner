@@ -98,6 +98,38 @@ def test_uploaded_alignment_preserves_all_sources_and_renders_overlay(tmp_path):
     assert report["input_counts"]["yolo_boxes"] == 2
     assert [item[0] for item in progress] == list(range(7))
 
+    yolo_aligned_path = Path(report["outputs"]["yolo_aligned_csv"])
+    with yolo_aligned_path.open(newline="", encoding="utf-8") as file:
+        yolo_aligned = list(csv.DictReader(file))
+    assert len(yolo_aligned) == report["alignment_rows"]
+    assert [float(row["start_meas"]) for row in yolo_aligned] == sorted(
+        float(row["start_meas"]) for row in yolo_aligned
+    )
+    with Path(report["outputs"]["review_queue_csv"]).open(
+        newline="", encoding="utf-8"
+    ) as file:
+        review_queue = list(csv.DictReader(file))
+    assert len(review_queue) == report["yolo_rows_needing_review"]
+    assert all(row["alignment_status"] != "matched" for row in review_queue)
+
+    xml_events_path = Path(report["outputs"]["xml_events_csv"])
+    with xml_events_path.open(newline="", encoding="utf-8") as file:
+        standalone_xml_events = list(csv.DictReader(file))
+    assert len(standalone_xml_events) == report["xml_event_rows"]
+    assert all(row["class"] for row in standalone_xml_events)
+
+    timeline_path = Path(report["outputs"]["yolo_xml_timeline_csv"])
+    with timeline_path.open(newline="", encoding="utf-8") as file:
+        timeline_rows = list(csv.DictReader(file))
+    assert len(timeline_rows) == report["timeline_rows"]
+    assert {row["source_record_type"] for row in timeline_rows} == {
+        "yolo",
+        "xml_event",
+    }
+    assert [float(row["start_meas"]) for row in timeline_rows] == sorted(
+        float(row["start_meas"]) for row in timeline_rows
+    )
+
     all_information_path = Path(report["outputs"]["all_information_csv"])
     with all_information_path.open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
@@ -121,9 +153,17 @@ def test_uploaded_alignment_preserves_all_sources_and_renders_overlay(tmp_path):
     overlay_path = Path(report["outputs"]["all_symbols_overlay"])
     with Image.open(overlay_path) as overlay:
         overlay.verify()
+    review_overlay_path = Path(report["outputs"]["review_overlay"])
+    with Image.open(review_overlay_path) as overlay:
+        overlay.verify()
 
     archive_path = build_output_zip(report, tmp_path / "output.zip")
     with zipfile.ZipFile(archive_path) as archive:
         names = set(archive.namelist())
-    assert "all_information_csv.csv" in names
-    assert "all_symbols_overlay.png" in names
+    assert "all_information.csv" in names
+    assert "page_all_symbols.png" in names
+    assert "page_needs_review.png" in names
+    assert "yolo_aligned.csv" in names
+    assert "review_queue.csv" in names
+    assert "xml_events.csv" in names
+    assert "yolo_xml_timeline.csv" in names

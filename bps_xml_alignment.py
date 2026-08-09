@@ -2839,7 +2839,8 @@ def draw_overlay(
 
         if mode == "all":
             label = (
-                f"{row['class']} {row['start_meas']}-{row['end_meas']} "
+                f"Y{row['txt_line']} {row['class']} "
+                f"{row['start_meas']}-{row['end_meas']} "
                 f"{row['status']}"
             )
         elif is_dynamic:
@@ -3096,6 +3097,7 @@ def run_alignment(
     dynamics_overlay = qa_dir / f"{page_stem}_dynamics.png"
     fingering_overlay = qa_dir / f"{page_stem}_fingerings.png"
     all_symbols_overlay = qa_dir / f"{page_stem}_all_symbols.png"
+    review_overlay = qa_dir / f"{page_stem}_needs_review.png"
     report_path = qa_dir / f"{page_stem}_report.json"
 
     write_csv(csv_path, rows)
@@ -3104,6 +3106,12 @@ def run_alignment(
     draw_overlay(image, rows, fingering_overlay, mode="fingerings")
     if include_all_symbols:
         draw_overlay(image, rows, all_symbols_overlay, mode="all")
+        draw_overlay(
+            image,
+            [row for row in rows if row["status"] != "matched"],
+            review_overlay,
+            mode="all",
+        )
 
     counts = defaultdict(lambda: defaultdict(int))
     for row in rows:
@@ -3178,6 +3186,9 @@ def run_alignment(
             "fingering_overlay": str(fingering_overlay),
             "all_symbols_overlay": (
                 str(all_symbols_overlay) if include_all_symbols else None
+            ),
+            "review_overlay": (
+                str(review_overlay) if include_all_symbols else None
             ),
         },
     }

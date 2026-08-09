@@ -57,6 +57,16 @@ dataset commands, whose page checkpoints are persisted on disk.
 
 ## Downloads
 
+- **Aligned YOLO CSV** contains exactly one row per YOLO box after alignment.
+  It is the primary file for checking class, start/end time, confidence, and
+  review status against the scan overlay.
+- **XML events CSV** contains MusicXML events only, with readable class names
+  and musical-time order.
+- **YOLO + XML timeline** contains every aligned YOLO row and every XML-event
+  row as separate records. `source_record_type` distinguishes them, and the
+  two sources are interleaved by `start_meas` and `end_meas`.
+- **Review queue CSV** contains only YOLO rows that are not machine-matched.
+  Its stable `Y{yolo_line}` identifiers are also printed on the review overlay.
 - **All-information CSV** is the most complete single CSV. Its
   `source_record_type` column identifies `yolo`, `xml_event`, and `xml_node`
   records. Timed YOLO and XML-event rows are ordered by `start_meas` and
@@ -69,6 +79,10 @@ dataset commands, whose page checkpoints are persisted on disk.
   files.
 - **All outputs ZIP** includes the CSV files, XML-node export, link table, JSON,
   and full-page review images.
+
+The selected review overlay can also be downloaded directly as a full-resolution
+PNG. Use the all-symbol overlay to audit every time assignment, or the
+needs-review overlay to focus only on inferred, ambiguous, and unresolved rows.
 
 ## Accuracy boundary
 

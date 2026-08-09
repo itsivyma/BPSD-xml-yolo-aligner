@@ -27,7 +27,7 @@ from repeat_mapping import build_repeat_mapping, write_repeat_mapping
 from xml_export import BPS_FIELDS, EVENT_FIELDS, NODE_FIELDS, export_score
 
 
-PIPELINE_VERSION = "0.3.0-all-symbol-time-alignment"
+PIPELINE_VERSION = "0.4.0-separated-timeline-outputs"
 ProgressCallback = Callable[[int, int, str], None]
 
 
@@ -153,6 +153,54 @@ def _build_all_information_csv(
     rows.sort(key=_time_sort_key)
     atomic_write_csv(destination, all_fields, rows)
     return len(yolo_rows), len(events), len(nodes)
+
+
+def _build_yolo_xml_timeline_csv(
+    yolo_path: Path,
+    events: list[dict],
+    destination: Path,
+) -> tuple[int, int]:
+    """Merge every aligned YOLO row and XML event as separate timed rows."""
+
+    with yolo_path.open(newline="", encoding="utf-8-sig") as file:
+        reader = csv.DictReader(file)
+        yolo_fields = list(reader.fieldnames or [])
+        yolo_rows = list(reader)
+    source_field = "source_record_type"
+    fields = BPS_FIELDS + [source_field] + [
+        field for field in yolo_fields if field not in BPS_FIELDS
+    ]
+    for field in EVENT_FIELDS:
+        if field not in fields:
+            fields.append(field)
+    rows = []
+    for source in yolo_rows:
+        row = {field: source.get(field, "") for field in fields}
+        row.update(
+            {
+                source_field: "yolo",
+                "record_id": source.get("bbox_id", ""),
+                "row_origin": "yolo",
+            }
+        )
+        rows.append(row)
+    for event in events:
+        row = {field: "" for field in fields}
+        row.update({field: event.get(field, "") for field in EVENT_FIELDS})
+        row.update(
+            {
+                source_field: "xml_event",
+                "record_id": event["xml_event_id"],
+                "row_origin": "xml_event",
+                "xml_path": event.get("source_xml_path", ""),
+                "xml_page": event.get("page", ""),
+                "xml_measure": event.get("xml_measure", ""),
+            }
+        )
+        rows.append(row)
+    rows.sort(key=_time_sort_key)
+    atomic_write_csv(destination, fields, rows)
+    return len(yolo_rows), len(events)
 
 
 def validate_upload_inputs(
@@ -378,8 +426,17 @@ def run_uploaded_alignment(
         unfolded_xml_path=unfolded_xml_path,
         bps_notes_path=bps_notes_path,
     )
+    master_rows.sort(key=_time_sort_key)
     yolo_master_path = output_dir / "yolo_master.csv"
+    yolo_aligned_path = output_dir / "yolo_aligned.csv"
+    review_queue_path = output_dir / "review_queue.csv"
     atomic_write_csv(yolo_master_path, FIELDS, master_rows)
+    atomic_write_csv(yolo_aligned_path, FIELDS, master_rows)
+    atomic_write_csv(
+        review_queue_path,
+        FIELDS,
+        [row for row in master_rows if row["alignment_status"] != "matched"],
+    )
 
     _report_progress(3, 6, "Exporting every MusicXML node and event", progress_callback)
     nodes, events = export_score(
@@ -392,6 +449,7 @@ def run_uploaded_alignment(
     )
     _sanitize_xml_source_paths(nodes, xml_path.name)
     _sanitize_xml_source_paths(events, xml_path.name)
+    events.sort(key=_time_sort_key)
     missing_xml_classes = [
         event["xml_event_id"] for event in events if not event.get("class")
     ]
@@ -419,6 +477,15 @@ def run_uploaded_alignment(
     if sorted_combined_rows != combined_report["combined_rows"]:
         errors.append("Time sorting changed the combined row count")
 
+    timeline_path = output_dir / "yolo_xml_timeline.csv"
+    timeline_yolo_count, timeline_event_count = _build_yolo_xml_timeline_csv(
+        yolo_aligned_path, events, timeline_path
+    )
+    if timeline_yolo_count != len(master_rows):
+        errors.append("Timeline CSV does not preserve every aligned YOLO row")
+    if timeline_event_count != len(events):
+        errors.append("Timeline CSV does not preserve every XML event")
+
     all_information_path = output_dir / "all_information.csv"
     included_yolo_count, included_event_count, included_node_count = (
         _build_all_information_csv(
@@ -441,9 +508,12 @@ def run_uploaded_alignment(
     outputs = {
         "official_csv": Path(alignment_report["outputs"]["csv"]),
         "detailed_csv": detailed_path,
+        "yolo_aligned_csv": yolo_aligned_path,
+        "review_queue_csv": review_queue_path,
         "yolo_master_csv": yolo_master_path,
         "xml_nodes_csv": xml_nodes_path,
         "xml_events_csv": xml_events_path,
+        "yolo_xml_timeline_csv": timeline_path,
         "all_information_csv": all_information_path,
         "combined_master_csv": combined_dir / "combined_master.csv",
         "alignment_links_csv": combined_dir / "alignment_links.csv",
@@ -470,6 +540,7 @@ def run_uploaded_alignment(
         "xml_node_rows": len(nodes),
         "xml_event_rows": len(events),
         "combined_rows": combined_report["combined_rows"],
+        "timeline_rows": len(master_rows) + len(events),
         "all_information_rows": len(master_rows) + len(events) + len(nodes),
         "combined_status_counts": combined_report["combined_status_counts"],
         "sort_order": "start_meas,end_meas,source_record_type,yolo_line,class",
@@ -494,9 +565,13 @@ def build_output_zip(report: dict, destination: Path) -> Path:
     """Package user-facing CSV, JSON, and review images."""
 
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        used_names = set()
         for name, value in report.get("outputs", {}).items():
             path = Path(value)
             if path.is_file():
-                suffix = path.suffix or ".bin"
-                archive.write(path, arcname=f"{name}{suffix}")
+                archive_name = path.name
+                if archive_name in used_names:
+                    archive_name = f"{name}{path.suffix or '.bin'}"
+                used_names.add(archive_name)
+                archive.write(path, arcname=archive_name)
     return destination

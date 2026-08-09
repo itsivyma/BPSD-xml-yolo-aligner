@@ -138,10 +138,16 @@ the same files reuses the in-memory result.
 
 The website returns:
 
+- `yolo_aligned.csv`: one time-sorted row per aligned YOLO box;
+- `xml_events.csv`: standalone time-sorted MusicXML musical events;
+- `yolo_xml_timeline.csv`: every YOLO and XML-event row interleaved by time;
+- `review_queue.csv`: only inferred, ambiguous, or unresolved YOLO rows;
 - `all_information.csv`: every YOLO row, MusicXML event, and raw XML node;
 - `combined_master.csv`: BPS-OMR-oriented YOLO and MusicXML event rows;
 - `alignment_detailed.csv`: box-level matching evidence and confidence;
-- full-page dynamics, fingering, and all-symbol review overlays;
+- full-page dynamics, fingering, all-symbol, and needs-review overlays, each
+  viewable and downloadable at its original resolution, with stable `Y{line}`
+  labels that map directly back to CSV rows;
 - validation JSON and a ZIP containing all generated outputs.
 
 Use `source_record_type` in `all_information.csv` to distinguish `yolo`,
