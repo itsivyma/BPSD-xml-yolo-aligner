@@ -19,6 +19,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -51,6 +52,20 @@ FINGERING_DY_WEIGHT = 0.18
 FINGERING_WRONG_STAFF_PENALTY_RATIO = 0.02
 FINGERING_STRICT_STAFF = False
 FINGERING_AUTO_ACCEPT_THRESHOLD = 0.95
+
+POINT_NOTATION_RULES = {
+    "articStaccatissimo": ("articulation", "staccatissimo"),
+    "articStaccato": ("articulation", "staccato"),
+    "articAccent": ("articulation", "accent"),
+    "articMarcato": ("articulation", "strong-accent"),
+    "fermata": ("fermata", "fermata"),
+    "ornamentTrill": ("ornament", "trill-mark"),
+    "ornamentShortTrill": ("ornament", "trill-mark"),
+    "ornamentWiggleTrill": ("ornament", "wavy-line"),
+    "ornamentTurnInverted": ("ornament", "inverted-turn"),
+    "ornamentTurn": ("ornament", "turn"),
+}
+GEOMETRIC_SPAN_CLASSES = {"slur", "tie", "ottavaBracket"}
 
 TARGET_CLASSES = {
     **{class_id: name for class_id, name in DYNAMIC_CLASS_BY_GLYPH.values()},
@@ -91,6 +106,8 @@ DETAILED_OUTPUT_FIELDS = [
     "status",
     "target_x_px",
     "target_y_px",
+    "end_target_x_px",
+    "end_target_y_px",
 ]
 
 SLUR_CANDIDATE_FIELDS = [
@@ -765,6 +782,7 @@ def parse_musicxml_page(xml_path: Path, page_number: int = 1) -> dict:
                     slur_marks = []
                     tie_marks = []
                     articulation_marks = []
+                    ornament_marks = []
                     fermata_marks = []
                     tuplet_marks = []
                     notations = child.find("notations")
@@ -790,6 +808,11 @@ def parse_musicxml_page(xml_path: Path, page_number: int = 1) -> dict:
                                 )
                             elif notation_name == "articulations":
                                 articulation_marks.extend(
+                                    _local_name(mark.tag)
+                                    for mark in notation
+                                )
+                            elif notation_name == "ornaments":
+                                ornament_marks.extend(
                                     _local_name(mark.tag)
                                     for mark in notation
                                 )
@@ -847,10 +870,17 @@ def parse_musicxml_page(xml_path: Path, page_number: int = 1) -> dict:
                             "slur_marks": slur_marks,
                             "tie_marks": tie_marks,
                             "articulation_marks": articulation_marks,
+                            "ornament_marks": ornament_marks,
                             "fermata_marks": fermata_marks,
                             "tuplet_marks": tuplet_marks,
                             "actual_notes": actual_notes,
                             "normal_notes": normal_notes,
+                            "accidental": (child.findtext("accidental") or "").strip(),
+                            "note_type": (child.findtext("type") or "").strip(),
+                            "beam_values": [
+                                (beam.text or "").strip()
+                                for beam in child.findall("beam")
+                            ],
                         }
                     )
                     xml_note_sequence += 1
@@ -992,6 +1022,12 @@ def parse_musicxml_page(xml_path: Path, page_number: int = 1) -> dict:
                     "timeline_offset": timeline_offset,
                     "measure_within": within,
                     "bps_time": (measure["measure"] - 1) + within,
+                    "system_measure_index": measure["system_measure_index"],
+                    "measure_x_norm": (
+                        raw_rest["measure_x"] / measure["width"]
+                        if measure["width"] > 0
+                        else 0.0
+                    ),
                     "x_norm": (
                         measure["system_x"] + raw_rest["measure_x"]
                     )
@@ -1710,6 +1746,8 @@ def _base_output_row(box: dict, system: int) -> dict:
         "status": "unmatched",
         "target_x_px": "NA",
         "target_y_px": "NA",
+        "end_target_x_px": "NA",
+        "end_target_y_px": "NA",
     }
 
 
@@ -2018,6 +2056,606 @@ def match_fingerings(
     return output
 
 
+def _event_geometry(
+    event: dict,
+    systems_by_number: dict[int, SystemGeometry],
+    measure_x_maps: dict[tuple[int, int], dict] | None,
+) -> tuple[float, float]:
+    system = systems_by_number[event["system"]]
+    if "diatonic" in event:
+        return note_pixel_position(event, system, measure_x_maps)
+    measure_map = (
+        measure_x_maps.get(
+            (event["system"], event.get("system_measure_index", -1))
+        )
+        if measure_x_maps
+        else None
+    )
+    if measure_map is not None and "measure_x_norm" in event:
+        within = min(1.0, max(0.0, float(event["measure_x_norm"])))
+        x = measure_map["left_x"] + within * (
+            measure_map["right_x"] - measure_map["left_x"]
+        )
+    else:
+        x = system.x_left + event["x_norm"] * (system.x_right - system.x_left)
+    staff = system.upper if event.get("staff", 1) == 1 else system.lower
+    return x, staff.center
+
+
+def _anchor(
+    event: dict,
+    systems_by_number: dict[int, SystemGeometry],
+    measure_x_maps: dict[tuple[int, int], dict] | None,
+    *,
+    members: list[dict] | None = None,
+    target_type: str | None = None,
+) -> dict:
+    x, y = _event_geometry(event, systems_by_number, measure_x_maps)
+    return {
+        "event": event,
+        "members": members if members is not None else ([event] if "midi" in event else []),
+        "x": x,
+        "y": y,
+        "target_type": target_type or ("note" if "midi" in event else "rest"),
+    }
+
+
+def _anchor_occurrences(anchor: dict) -> list[dict]:
+    event = anchor["event"]
+    return list(event.get("occurrences") or event.get("repeat_occurrences") or [])
+
+
+def _span_occurrences(start: dict, end: dict) -> list[dict]:
+    starts = _anchor_occurrences(start)
+    ends = _anchor_occurrences(end)
+    if not starts and not ends:
+        return []
+    count = max(len(starts), len(ends))
+    output = []
+    for index in range(count):
+        start_item = starts[min(index, len(starts) - 1)] if starts else {}
+        end_item = ends[min(index, len(ends) - 1)] if ends else {}
+        output.append(
+            {
+                "repeat_occurrence": index + 1,
+                "repeat_occurrence_count": count,
+                "repeat_group_id": start_item.get(
+                    "repeat_group_id", end_item.get("repeat_group_id", "")
+                ),
+                "start_meas": start_item.get(
+                    "bps_time", start["event"]["bps_time"]
+                ),
+                "end_meas": end_item.get("bps_time", end["event"]["bps_time"]),
+                "start_note": start_item.get("note_id"),
+                "end_note": end_item.get("note_id"),
+                "mapping_status": start_item.get(
+                    "mapping_status", end_item.get("mapping_status", "")
+                ),
+            }
+        )
+    return output
+
+
+def _row_from_anchors(
+    box: dict,
+    start: dict,
+    end: dict,
+    *,
+    match_source: str,
+    confidence: float,
+    status: str,
+    xml_symbol: str,
+) -> dict:
+    start_event = start["event"]
+    end_event = end["event"]
+    members = []
+    for member in [*start.get("members", []), *end.get("members", [])]:
+        sequence = member.get("xml_note_sequence")
+        key = (sequence, member.get("note_id"), member.get("pitch_name"))
+        if not any(item[0] == key for item in members):
+            members.append((key, member))
+    member_events = [item[1] for item in members]
+    note_ids = [
+        member["note_id"]
+        for member in member_events
+        if member.get("note_id") is not None
+    ]
+    pitches = [
+        member["pitch_name"]
+        for member in member_events
+        if member.get("pitch_name")
+    ]
+    occurrences = (
+        _anchor_occurrences(start)
+        if start is end
+        else _span_occurrences(start, end)
+    )
+    row = _base_output_row(box, int(start_event["system"]))
+    row.update(
+        {
+            "start_meas": f"{float(start_event['bps_time']):.3f}",
+            "end_meas": f"{float(end_event['bps_time']):.3f}",
+            "start_note": (
+                start_event.get("note_id")
+                if start_event.get("note_id") is not None
+                else "NA" if start["target_type"] == "rest" else ""
+            ),
+            "end_note": (
+                end_event.get("note_id")
+                if end_event.get("note_id") is not None
+                else "NA" if end["target_type"] == "rest" else ""
+            ),
+            "connected_note": json.dumps(note_ids) if note_ids else "NA",
+            "xml_measure": start_event["xml_measure"],
+            "xml_symbol": xml_symbol,
+            "xml_staff": start_event.get("staff", ""),
+            "target_type": (
+                "span" if start is not end else start.get("target_type", "note")
+            ),
+            "note_ids": json.dumps(note_ids),
+            "pitches": json.dumps(pitches, ensure_ascii=False),
+            "repeat_occurrences_json": json.dumps(occurrences, ensure_ascii=False),
+            "repeat_occurrence_count": len(occurrences) if occurrences else 1,
+            "repeat_group_id": (
+                occurrences[0].get("repeat_group_id", "") if occurrences else ""
+            ),
+            "match_source": match_source,
+            "confidence": f"{confidence:.3f}",
+            "status": status,
+            "target_x_px": f"{start['x']:.1f}",
+            "target_y_px": f"{start['y']:.1f}",
+            "end_target_x_px": f"{end['x']:.1f}",
+            "end_target_y_px": f"{end['y']:.1f}",
+        }
+    )
+    if box["class"].startswith("stem") and start_event.get("stem"):
+        row["stem_dir"] = 0 if start_event["stem"] == "down" else 1
+    return row
+
+
+def _greedy_pairs(
+    boxes: list[dict],
+    targets: list[dict],
+    cost,
+) -> list[tuple[dict, dict, float]]:
+    scored = sorted(
+        (cost(box, target), box_index, target_index)
+        for box_index, box in enumerate(boxes)
+        for target_index, target in enumerate(targets)
+    )
+    used_boxes: set[int] = set()
+    used_targets: set[int] = set()
+    output = []
+    for value, box_index, target_index in scored:
+        if box_index in used_boxes or target_index in used_targets:
+            continue
+        if value >= 1_000_000:
+            continue
+        used_boxes.add(box_index)
+        used_targets.add(target_index)
+        output.append((boxes[box_index], targets[target_index], value))
+    return output
+
+
+def _notation_rule(class_name: str) -> tuple[str, str] | None:
+    for prefix, rule in POINT_NOTATION_RULES.items():
+        if class_name.startswith(prefix):
+            return rule
+    return None
+
+
+def match_point_notations(
+    boxes: list[dict],
+    xml_notes: list[dict],
+    xml_rests: list[dict],
+    systems: list[SystemGeometry],
+    image_width: int,
+    image_height: int,
+    measure_x_maps: dict[tuple[int, int], dict] | None = None,
+) -> list[dict]:
+    """Match point-like YOLO notations to explicit MusicXML note/rest marks."""
+
+    systems_by_number = {system.number: system for system in systems}
+    chord_members: dict[int, list[dict]] = defaultdict(list)
+    for note in xml_notes:
+        chord_members[note["xml_chord_sequence"]].append(note)
+
+    targets_by_rule: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    seen = set()
+    for note in xml_notes:
+        marks = [
+            *(("articulation", mark) for mark in note.get("articulation_marks", [])),
+            *(("ornament", mark) for mark in note.get("ornament_marks", [])),
+        ]
+        if note.get("fermata_marks"):
+            marks.append(("fermata", "fermata"))
+        for rule in marks:
+            key = (rule, note["xml_chord_sequence"])
+            if key in seen:
+                continue
+            seen.add(key)
+            target = _anchor(
+                note,
+                systems_by_number,
+                measure_x_maps,
+                members=sorted(
+                    chord_members[note["xml_chord_sequence"]],
+                    key=lambda item: (item["midi"], item["xml_note_sequence"]),
+                ),
+                target_type="chord",
+            )
+            target["placement"] = next(
+                (
+                    mark.get("placement", "")
+                    for mark in note.get("fermata_marks", [])
+                    if rule[0] == "fermata"
+                ),
+                "",
+            )
+            targets_by_rule[rule].append(target)
+    for rest in xml_rests:
+        if rest.get("fermata_marks"):
+            target = _anchor(
+                rest,
+                systems_by_number,
+                measure_x_maps,
+                members=[],
+                target_type="rest",
+            )
+            target["placement"] = rest["fermata_marks"][0].get("placement", "")
+            targets_by_rule[("fermata", "fermata")].append(target)
+
+    output = []
+    boxes_by_rule: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for box in boxes:
+        rule = _notation_rule(box["class"])
+        if rule:
+            boxes_by_rule[rule].append(box)
+    for rule, rule_boxes in boxes_by_rule.items():
+        targets = targets_by_rule.get(rule, [])
+
+        def cost(box: dict, target: dict) -> float:
+            box_system = assign_system(box, systems, image_height)
+            if box_system != target["event"]["system"]:
+                return 1_000_000
+            bx, by = box["x"] * image_width, box["y"] * image_height
+            placement_violation = (
+                box["class"].endswith("Above") and by >= target["y"]
+            ) or (
+                box["class"].endswith("Below") and by <= target["y"]
+            )
+            return (
+                3.0 * abs(bx - target["x"]) / max(image_width, 1)
+                + abs(by - target["y"]) / max(image_height, 1)
+                + (0.35 if placement_violation else 0.0)
+            )
+
+        count_equal = len(rule_boxes) == len(targets)
+        for box, target, pair_cost in _greedy_pairs(rule_boxes, targets, cost):
+            confidence = min(0.99, max(0.20, math.exp(-3.0 * pair_cost)))
+            status = "matched" if count_equal and confidence >= 0.65 else "review"
+            output.append(
+                _row_from_anchors(
+                    box,
+                    target,
+                    target,
+                    match_source=f"musicxml_{rule[1]}",
+                    confidence=confidence,
+                    status=status,
+                    xml_symbol=rule[1],
+                )
+            )
+    return output
+
+
+def _find_candidate_note(
+    notes: list[dict],
+    *,
+    bps_time: str,
+    pitch: str,
+    measure: object,
+    staff: object,
+    voice: object,
+) -> dict | None:
+    candidates = [
+        note
+        for note in notes
+        if note["pitch_name"] == pitch
+        and str(note["xml_measure"]) == str(measure)
+        and str(note["staff"]) == str(staff)
+        and str(note["voice"]) == str(voice)
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda note: abs(note["bps_time"] - float(bps_time)))
+
+
+def match_xml_spans(
+    boxes: list[dict],
+    xml_notes: list[dict],
+    bps_notes: list[dict],
+    systems: list[SystemGeometry],
+    image_width: int,
+    image_height: int,
+    measure_x_maps: dict[tuple[int, int], dict] | None = None,
+) -> list[dict]:
+    """Match YOLO slur/tie boxes to paired MusicXML endpoints."""
+
+    systems_by_number = {system.number: system for system in systems}
+    targets_by_class: dict[str, list[dict]] = defaultdict(list)
+    slurs, _slur_issues = build_slur_candidates(xml_notes, bps_notes)
+    ties, _tie_issues = build_tie_candidates(xml_notes, bps_notes)
+    for class_name, candidates in (("slur", slurs), ("tie", ties)):
+        for candidate in candidates:
+            if class_name == "slur":
+                start = _find_candidate_note(
+                    xml_notes,
+                    bps_time=candidate["start_meas"],
+                    pitch=candidate["start_pitch"],
+                    measure=candidate["start_xml_measure"],
+                    staff=candidate["start_staff"],
+                    voice=candidate["start_voice"],
+                )
+                end = _find_candidate_note(
+                    xml_notes,
+                    bps_time=candidate["end_meas"],
+                    pitch=candidate["end_pitch"],
+                    measure=candidate["end_xml_measure"],
+                    staff=candidate["end_staff"],
+                    voice=candidate["end_voice"],
+                )
+            else:
+                start = _find_candidate_note(
+                    xml_notes,
+                    bps_time=candidate["start_meas"],
+                    pitch=candidate["pitch"],
+                    measure=candidate["start_xml_measure"],
+                    staff=candidate["staff"],
+                    voice=candidate["voice"],
+                )
+                end = _find_candidate_note(
+                    xml_notes,
+                    bps_time=candidate["end_meas"],
+                    pitch=candidate["pitch"],
+                    measure=candidate["end_xml_measure"],
+                    staff=candidate["staff"],
+                    voice=candidate["voice"],
+                )
+            if start is None or end is None:
+                continue
+            targets_by_class[class_name].append(
+                {
+                    "candidate": candidate,
+                    "start": _anchor(start, systems_by_number, measure_x_maps),
+                    "end": _anchor(end, systems_by_number, measure_x_maps),
+                }
+            )
+
+    output = []
+    for class_name in ("slur", "tie"):
+        class_boxes = [box for box in boxes if box["class"] == class_name]
+        targets = targets_by_class[class_name]
+
+        def cost(box: dict, target: dict) -> float:
+            box_system = assign_system(box, systems, image_height)
+            start, end = target["start"], target["end"]
+            if box_system not in {
+                start["event"]["system"],
+                end["event"]["system"],
+            }:
+                return 1_000_000
+            bx = box["x"] * image_width
+            by = box["y"] * image_height
+            if start["event"]["system"] == end["event"]["system"]:
+                center_x = (start["x"] + end["x"]) / 2
+                center_y = (start["y"] + end["y"]) / 2
+                expected_width = abs(end["x"] - start["x"])
+                return (
+                    2.0 * abs(bx - center_x) / max(image_width, 1)
+                    + 0.35 * abs(by - center_y) / max(image_height, 1)
+                    + abs(box["w"] * image_width - expected_width)
+                    / max(image_width, 1)
+                )
+            local = start if box_system == start["event"]["system"] else end
+            return (
+                2.0 * abs(bx - local["x"]) / max(image_width, 1)
+                + 0.35 * abs(by - local["y"]) / max(image_height, 1)
+                + 0.25
+            )
+
+        count_equal = len(class_boxes) == len(targets)
+        for box, target, pair_cost in _greedy_pairs(class_boxes, targets, cost):
+            confidence = min(0.99, max(0.20, math.exp(-3.0 * pair_cost)))
+            candidate = target["candidate"]
+            confirmed = candidate["status"] == "time_confirmed"
+            status = (
+                "matched"
+                if confirmed and count_equal and confidence >= 0.60
+                else "review"
+            )
+            output.append(
+                _row_from_anchors(
+                    box,
+                    target["start"],
+                    target["end"],
+                    match_source=f"musicxml_{class_name}_endpoints",
+                    confidence=confidence,
+                    status=status,
+                    xml_symbol=class_name,
+                )
+            )
+    return output
+
+
+def _tuplet_groups(notes: list[dict]) -> list[dict]:
+    ordered = sorted(notes, key=lambda note: note["xml_note_sequence"])
+    groups = []
+    for start in ordered:
+        if not any(mark["type"] == "start" for mark in start.get("tuplet_marks", [])):
+            continue
+        count = int(start.get("actual_notes") or 0)
+        if not count:
+            continue
+        members = [
+            note
+            for note in ordered
+            if note["xml_measure"] == start["xml_measure"]
+            and note["staff"] == start["staff"]
+            and note["voice"] == start["voice"]
+            and note.get("actual_notes") == count
+            and note["xml_note_sequence"] >= start["xml_note_sequence"]
+        ][:count]
+        if len(members) == count:
+            groups.append({"actual_notes": count, "members": members})
+    return groups
+
+
+def match_tuplets(
+    boxes: list[dict],
+    xml_notes: list[dict],
+    systems: list[SystemGeometry],
+    image_width: int,
+    image_height: int,
+    measure_x_maps: dict[tuple[int, int], dict] | None = None,
+) -> list[dict]:
+    systems_by_number = {system.number: system for system in systems}
+    groups = []
+    for group in _tuplet_groups(xml_notes):
+        anchors = [
+            _anchor(note, systems_by_number, measure_x_maps)
+            for note in group["members"]
+        ]
+        groups.append({**group, "anchors": anchors})
+    tuplet_boxes = [box for box in boxes if box["class"].startswith("tuplet")]
+
+    def box_count(box: dict) -> int | None:
+        match = re.fullmatch(r"tuplet(\d+)", box["class"])
+        return int(match.group(1)) if match else None
+
+    def cost(box: dict, group: dict) -> float:
+        count = box_count(box)
+        if count is not None and count != group["actual_notes"]:
+            return 1_000_000
+        box_system = assign_system(box, systems, image_height)
+        if box_system != group["members"][0]["system"]:
+            return 1_000_000
+        x = sum(anchor["x"] for anchor in group["anchors"]) / len(group["anchors"])
+        y = sum(anchor["y"] for anchor in group["anchors"]) / len(group["anchors"])
+        return (
+            2.0 * abs(box["x"] * image_width - x) / max(image_width, 1)
+            + 0.3 * abs(box["y"] * image_height - y) / max(image_height, 1)
+        )
+
+    output = []
+    count_equal = len(tuplet_boxes) == len(groups)
+    for box, group, pair_cost in _greedy_pairs(tuplet_boxes, groups, cost):
+        confidence = min(0.99, max(0.20, math.exp(-3.0 * pair_cost)))
+        start, end = group["anchors"][0], group["anchors"][-1]
+        start["members"] = group["members"]
+        end["members"] = []
+        output.append(
+            _row_from_anchors(
+                box,
+                start,
+                end,
+                match_source="musicxml_tuplet_group",
+                confidence=confidence,
+                status="matched" if count_equal and confidence >= 0.60 else "review",
+                xml_symbol=f"tuplet{group['actual_notes']}",
+            )
+        )
+    return output
+
+
+def _is_geometric_span_class(class_name: str) -> bool:
+    return (
+        class_name in GEOMETRIC_SPAN_CLASSES
+        or class_name == "ottavaBracket"
+        or class_name.startswith("tuplet")
+        or class_name.startswith("dynamicCrescendo")
+        or class_name.startswith("dynamicDiminuendo")
+        or class_name in {"keyboardPedalPed", "ornamentWiggleTrill"}
+    )
+
+
+def estimate_all_symbol_times(
+    boxes: list[dict],
+    xml_notes: list[dict],
+    xml_rests: list[dict],
+    systems: list[SystemGeometry],
+    image_width: int,
+    image_height: int,
+    measure_x_maps: dict[tuple[int, int], dict] | None = None,
+) -> list[dict]:
+    """Give every box a conservative geometry-derived musical-time candidate."""
+
+    systems_by_number = {system.number: system for system in systems}
+    anchors = [
+        _anchor(note, systems_by_number, measure_x_maps) for note in xml_notes
+    ] + [
+        _anchor(rest, systems_by_number, measure_x_maps) for rest in xml_rests
+    ]
+    rows = []
+    for box in boxes:
+        system_number = assign_system(box, systems, image_height)
+        candidates = [
+            anchor
+            for anchor in anchors
+            if anchor["event"]["system"] == system_number
+        ]
+        if not candidates:
+            row = _base_output_row(box, system_number)
+            row.update(
+                {
+                    "start_meas": "",
+                    "end_meas": "",
+                    "start_note": "",
+                    "end_note": "",
+                    "connected_note": "",
+                    "xml_measure": "",
+                    "xml_symbol": "",
+                    "xml_staff": "",
+                    "match_source": "no_musicxml_anchor",
+                    "status": "unresolved",
+                }
+            )
+            rows.append(row)
+            continue
+        bx = box["x"] * image_width
+        by = box["y"] * image_height
+
+        def distance(anchor: dict, x: float) -> float:
+            return abs(anchor["x"] - x) + 0.18 * abs(anchor["y"] - by)
+
+        if _is_geometric_span_class(box["class"]):
+            start_x = (box["x"] - box["w"] / 2) * image_width
+            end_x = (box["x"] + box["w"] / 2) * image_width
+            start = min(candidates, key=lambda anchor: distance(anchor, start_x))
+            end = min(candidates, key=lambda anchor: distance(anchor, end_x))
+            if end["event"]["bps_time"] < start["event"]["bps_time"]:
+                start, end = end, start
+            source = "geometric_span_time_estimate"
+        else:
+            start = min(candidates, key=lambda anchor: distance(anchor, bx))
+            end = start
+            source = "geometric_nearest_anchor_time_estimate"
+        nearest_distance = distance(start, bx) / max(image_width, 1)
+        confidence = min(0.49, max(0.10, 0.49 * math.exp(-4 * nearest_distance)))
+        row = _row_from_anchors(
+            box,
+            start,
+            end,
+            match_source=source,
+            confidence=confidence,
+            status="review",
+            xml_symbol=start["event"].get("pitch_name", "rest"),
+        )
+        if box["class"].startswith("tempo") or box["class"].startswith("term"):
+            row["musical_time"] = 1
+        rows.append(row)
+    return rows
+
+
 def unresolved_fingering_rows(
     boxes: list[dict],
     systems: list[SystemGeometry],
@@ -2200,7 +2838,10 @@ def draw_overlay(
         draw.rectangle(rectangle, outline=color, width=2)
 
         if mode == "all":
-            label = row["class"]
+            label = (
+                f"{row['class']} {row['start_meas']}-{row['end_meas']} "
+                f"{row['status']}"
+            )
         elif is_dynamic:
             label = (
                 f"{row['class']} m{row['xml_measure']} "
@@ -2214,34 +2855,39 @@ def draw_overlay(
                     f"{row['class'][-1]} n={row['start_note']} "
                     f"t={row['start_meas']} c={row['confidence']}"
                 )
-            if (
-                row["target_x_px"] not in {"", "NA"}
-                and row["target_y_px"] not in {"", "NA"}
-            ):
-                box_center = (
-                    round(x * width),
-                    round(y * height),
-                )
-                note_center = (
-                    round(float(row["target_x_px"])),
-                    round(float(row["target_y_px"])),
-                )
-                draw.line(
-                    (box_center, note_center),
-                    fill=color,
-                    width=1,
-                )
+
+        if (
+            row["target_x_px"] not in {"", "NA"}
+            and row["target_y_px"] not in {"", "NA"}
+        ):
+            box_center = (round(x * width), round(y * height))
+            start_center = (
+                round(float(row["target_x_px"])),
+                round(float(row["target_y_px"])),
+            )
+            end_x = row.get("end_target_x_px")
+            end_y = row.get("end_target_y_px")
+            if end_x in {None, "", "NA"} or end_y in {None, "", "NA"}:
+                end_x, end_y = row["target_x_px"], row["target_y_px"]
+            end_center = (
+                round(float(end_x)),
+                round(float(end_y)),
+            )
+            for target_center in dict.fromkeys((start_center, end_center)):
+                draw.line((box_center, target_center), fill=color, width=1)
                 radius = 3
                 draw.ellipse(
                     (
-                        note_center[0] - radius,
-                        note_center[1] - radius,
-                        note_center[0] + radius,
-                        note_center[1] + radius,
+                        target_center[0] - radius,
+                        target_center[1] - radius,
+                        target_center[0] + radius,
+                        target_center[1] + radius,
                     ),
                     outline=color,
                     width=1,
                 )
+            if start_center != end_center:
+                draw.line((start_center, end_center), fill=color, width=2)
 
         text_y = max(0, rectangle[1] - (18 if is_dynamic else 14))
         draw.text(
@@ -2345,6 +2991,7 @@ def run_alignment(
             xml_page["notes"], repeat_rows, bps_notes
         )
         attach_timeline_repeat_occurrences(xml_page["dynamics"], repeat_rows)
+        attach_timeline_repeat_occurrences(xml_page["rests"], repeat_rows)
     else:
         attach_bps_note_ids(xml_page["notes"], bps_notes)
         expanded_notes = xml_page["notes"]
@@ -2358,13 +3005,47 @@ def run_alignment(
     if include_all_symbols:
         rows_by_line = {
             int(row["txt_line"]): row
-            for row in conservative_all_symbol_rows(
+            for row in estimate_all_symbol_times(
                 target_boxes,
+                xml_page["notes"],
+                xml_page["rests"],
                 systems,
+                image.width,
                 image.height,
+                measure_x_maps=measure_x_maps,
             )
         }
         for row in dynamic_rows:
+            if row["status"] != "unmatched":
+                rows_by_line[int(row["txt_line"])] = row
+        for row in match_point_notations(
+            target_boxes,
+            xml_page["notes"],
+            xml_page["rests"],
+            systems,
+            image.width,
+            image.height,
+            measure_x_maps=measure_x_maps,
+        ):
+            rows_by_line[int(row["txt_line"])] = row
+        for row in match_xml_spans(
+            target_boxes,
+            xml_page["notes"],
+            bps_notes,
+            systems,
+            image.width,
+            image.height,
+            measure_x_maps=measure_x_maps,
+        ):
+            rows_by_line[int(row["txt_line"])] = row
+        for row in match_tuplets(
+            target_boxes,
+            xml_page["notes"],
+            systems,
+            image.width,
+            image.height,
+            measure_x_maps=measure_x_maps,
+        ):
             rows_by_line[int(row["txt_line"])] = row
         if infer_fingerings:
             fingering_rows = match_fingerings(
@@ -2376,7 +3057,8 @@ def run_alignment(
                 measure_x_maps=measure_x_maps,
             )
             for row in fingering_rows:
-                rows_by_line[int(row["txt_line"])] = row
+                if row["status"] != "unmatched":
+                    rows_by_line[int(row["txt_line"])] = row
         rows = sorted(
             rows_by_line.values(),
             key=lambda row: int(row["txt_line"]),
@@ -2468,8 +3150,9 @@ def run_alignment(
         "include_all_symbols": include_all_symbols,
         "limitations": (
             [
-                "Only dynamicF/P/S currently have confirmed MusicXML times.",
-                "All other uncertain semantic fields are intentionally blank.",
+                "Direct XML notation matching covers dynamics, staccato, fermata, slur, tie, ornaments, and tuplets.",
+                "Classes without direct XML evidence receive geometry-derived time candidates and status=review.",
+                "Only rows with no usable MusicXML anchor remain unresolved with blank times.",
                 (
                     "Repeat occurrences are attached from the verified mapping."
                     if repeat_mapping_path is not None

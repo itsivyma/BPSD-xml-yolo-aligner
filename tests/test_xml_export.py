@@ -104,6 +104,7 @@ def test_export_score_is_lossless_and_bps_oriented(tmp_path):
     ]
 
     event_pairs = {(row["event_type"], row["event_subtype"]) for row in events}
+    assert all(row["class"] for row in events)
     assert ("attribute", "time_signature") in event_pairs
     assert ("attribute", "key") in event_pairs
     assert ("attribute", "clef") in event_pairs
@@ -115,9 +116,12 @@ def test_export_score_is_lossless_and_bps_oriented(tmp_path):
     assert ("barline", "barline") in event_pairs
 
     dynamic = next(row for row in events if row["dynamic"] == "f")
+    assert dynamic["class"] == "dynamicF"
     assert dynamic["staff"] == "2"
     assert dynamic["voice"] == "2"
     note = next(row for row in events if row["event_type"] == "note")
+    staccato = next(row for row in events if row["event_subtype"] == "staccato")
+    assert staccato["class"] == "articStaccatoAbove"
     assert note["start_note"] == 0
     assert note["validation_status"] == "bps_note_matched"
     note_occurrence = json.loads(note["repeat_json"])[0]

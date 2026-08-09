@@ -18,6 +18,9 @@ from bps_xml_alignment import (
     load_categories,
     load_yolo,
     match_fingerings,
+    match_point_notations,
+    match_xml_spans,
+    estimate_all_symbol_times,
     note_pixel_position,
     parse_musicxml_page,
     snap_notehead_x,
@@ -444,6 +447,98 @@ def test_build_slur_candidates_allows_cross_staff_slur():
     assert len(candidates) == 1
     assert candidates[0]["start_staff"] == 1
     assert candidates[0]["end_staff"] == 2
+
+
+def _timed_note(
+    sequence, time, pitch, midi, x_norm, *, marks=None, ties=None, fermata=False
+):
+    return {
+        "xml_note_sequence": sequence,
+        "xml_chord_sequence": sequence,
+        "bps_time": time,
+        "midi": midi,
+        "pitch_name": pitch,
+        "diatonic": 28 + sequence,
+        "staff": 1,
+        "voice": "1",
+        "system": 1,
+        "xml_measure": 2,
+        "xml_measure_index": 2,
+        "system_measure_index": 0,
+        "measure_x_norm": x_norm,
+        "x_norm": x_norm,
+        "clef": {"sign": "G", "line": 2},
+        "note_id": sequence,
+        "occurrences": [],
+        "slur_marks": marks or [],
+        "tie_marks": ties or [],
+        "articulation_marks": ["staccato"] if sequence == 0 else [],
+        "ornament_marks": [],
+        "fermata_marks": [{"placement": "above"}] if fermata else [],
+        "tuplet_marks": [],
+        "stem": "up",
+    }
+
+
+def test_direct_notations_and_spans_receive_start_and_end_times():
+    systems = [
+        SystemGeometry(
+            number=1,
+            upper=StaffGeometry(center=100, line_spacing=10, lines=[80, 90, 100, 110, 120]),
+            lower=StaffGeometry(center=250, line_spacing=10, lines=[230, 240, 250, 260, 270]),
+            x_left=100,
+            x_right=900,
+        )
+    ]
+    notes = [
+        _timed_note(0, 1.0, "G4", 67, 0.15, marks=[{"type": "start", "number": "1", "orientation": "over"}]),
+        _timed_note(1, 1.5, "F#4", 66, 0.40, marks=[{"type": "stop", "number": "1", "orientation": "over"}], fermata=True),
+        _timed_note(2, 2.0, "C4", 60, 0.60, ties=[{"type": "start"}]),
+        _timed_note(3, 2.5, "C4", 60, 0.82, ties=[{"type": "stop"}]),
+    ]
+    bps_notes = [
+        {"note_id": index, "bps_time": note["bps_time"], "end_time": note["bps_time"] + 0.25, "midi": note["midi"]}
+        for index, note in enumerate(notes)
+    ]
+    boxes = [
+        {"txt_line": 1, "class_id": 16, "class": "articStaccatoAbove", "x": 0.27, "y": 0.12, "w": 0.02, "h": 0.02},
+        {"txt_line": 2, "class_id": 37, "class": "fermataAbove", "x": 0.42, "y": 0.11, "w": 0.04, "h": 0.03},
+        {"txt_line": 3, "class_id": 87, "class": "slur", "x": 0.32, "y": 0.14, "w": 0.22, "h": 0.04},
+        {"txt_line": 4, "class_id": 145, "class": "tie", "x": 0.67, "y": 0.20, "w": 0.20, "h": 0.03},
+    ]
+
+    point_rows = match_point_notations(boxes, notes, [], systems, 1000, 500)
+    span_rows = match_xml_spans(boxes, notes, bps_notes, systems, 1000, 500)
+    by_class = {row["class"]: row for row in point_rows + span_rows}
+
+    assert by_class["articStaccatoAbove"]["start_meas"] == "1.000"
+    assert by_class["articStaccatoAbove"]["end_meas"] == "1.000"
+    assert by_class["fermataAbove"]["start_meas"] == "1.500"
+    assert by_class["slur"]["start_meas"] == "1.000"
+    assert by_class["slur"]["end_meas"] == "1.500"
+    assert by_class["tie"]["start_meas"] == "2.000"
+    assert by_class["tie"]["end_meas"] == "2.500"
+
+
+def test_unknown_class_receives_reviewable_geometry_time_estimate():
+    systems = [
+        SystemGeometry(
+            number=1,
+            upper=StaffGeometry(center=100, line_spacing=10, lines=[80, 90, 100, 110, 120]),
+            lower=StaffGeometry(center=250, line_spacing=10, lines=[230, 240, 250, 260, 270]),
+            x_left=100,
+            x_right=900,
+        )
+    ]
+    note = _timed_note(0, 3.25, "G4", 67, 0.5)
+    box = {"txt_line": 1, "class_id": 115, "class": "termDolce", "x": 0.5, "y": 0.15, "w": 0.12, "h": 0.03}
+
+    row = estimate_all_symbol_times([box], [note], [], systems, 1000, 500)[0]
+
+    assert row["start_meas"] == "3.250"
+    assert row["end_meas"] == "3.250"
+    assert row["status"] == "review"
+    assert row["match_source"] == "geometric_nearest_anchor_time_estimate"
 
 
 def test_detect_systems_finds_paired_staves():

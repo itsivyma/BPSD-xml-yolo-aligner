@@ -6,6 +6,7 @@ import argparse
 import csv
 import hashlib
 import json
+import re
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict, deque
 from pathlib import Path
@@ -19,7 +20,7 @@ from pipeline_checkpoint import (
 )
 
 
-PIPELINE_VERSION = "0.3.0-xml-export"
+PIPELINE_VERSION = "0.4.0-xml-class-names"
 BPS_FIELDS = [
     "class_id", "x", "y", "w", "h", "class", "musical_time",
     "start_meas", "end_meas", "start_note", "end_note",
@@ -265,6 +266,114 @@ def _empty_event() -> dict:
     return row
 
 
+def _camel_words(value: str) -> str:
+    words = re.findall(r"[^\W_]+", value, flags=re.UNICODE)
+    return "".join(word[:1].upper() + word[1:] for word in words)
+
+
+def _xml_event_class(
+    element: ET.Element,
+    event_type: str,
+    subtype: str,
+    values: dict,
+) -> str:
+    """Return a readable YOLO-compatible class where MusicXML permits it."""
+
+    placement = element.attrib.get("placement", "").lower()
+    placement_suffix = "Above" if placement == "above" else "Below" if placement == "below" else ""
+    if event_type == "note":
+        return "note"
+    if event_type == "rest":
+        return "rest"
+    if event_type == "attribute":
+        return {
+            "clef": "xmlClef",
+            "key": "xmlKeySignature",
+            "time_signature": "xmlTimeSignature",
+        }.get(subtype, f"xml{_camel_words(subtype)}")
+    if event_type == "barline":
+        return "barline"
+    if event_type == "notation":
+        if subtype == "staccato":
+            return f"articStaccato{placement_suffix}"
+        if subtype == "staccatissimo":
+            return f"articStaccatissimo{placement_suffix}"
+        if subtype == "accent":
+            return f"articAccent{placement_suffix}"
+        if subtype == "strong-accent":
+            return f"articMarcato{placement_suffix}"
+        if subtype == "fermata":
+            return f"fermata{placement_suffix or 'Above'}"
+        return {
+            "slur": "slur",
+            "tie": "tie",
+            "tied": "tie",
+            "tuplet": "tuplet",
+            "trill-mark": "ornamentTrill",
+            "wavy-line": "ornamentWiggleTrill",
+            "turn": "ornamentTurn",
+            "inverted-turn": "ornamentTurnInverted",
+        }.get(subtype, f"xmlNotation{_camel_words(subtype)}")
+    if event_type == "direction":
+        if subtype == "dynamic":
+            symbol = str(values.get("dynamic", ""))
+            return {
+                "f": "dynamicF",
+                "p": "dynamicP",
+                "s": "dynamicS",
+                "mf": "dynamicMF",
+                "mp": "dynamicMP",
+                "sf": "dynamicSF",
+                "sfp": "dynamicSFP",
+                "ff": "dynamicFF",
+                "pp": "dynamicPP",
+                "fp": "dynamicFP",
+            }.get(symbol, f"dynamic{symbol.upper()}" if symbol else "dynamic")
+        if subtype == "wedge":
+            wedge_type = element.attrib.get("type", "")
+            if wedge_type == "crescendo":
+                return "dynamicCrescendoHairpin"
+            if wedge_type == "diminuendo":
+                return "dynamicDiminuendoHairpin"
+            return "dynamicHairpinStop"
+        if subtype == "pedal":
+            return (
+                "keyboardPedalUp"
+                if element.attrib.get("type") in {"stop", "change"}
+                else "keyboardPedalPed"
+            )
+        if subtype == "octave-shift":
+            return "ottavaBracket"
+        if subtype == "words":
+            text = (element.text or "").strip()
+            normalized = text.casefold().rstrip(". ")
+            tempo_words = {
+                "a tempo": "tempoATempo",
+                "adagio": "tempoAdagio",
+                "allegretto": "tempoAllegretto",
+                "allegro": "tempoAllegro",
+                "andante": "tempoAndante",
+                "grave": "tempoGrave",
+                "in tempo": "tempoInTempo",
+                "largo": "tempoLargo",
+                "moderato": "tempoModerato",
+                "prestissimo": "tempoPrestissimo",
+                "presto": "tempoPresto",
+                "vivace": "tempoVivace",
+            }
+            if normalized in tempo_words:
+                return tempo_words[normalized]
+            if normalized.startswith(("rit", "rall")):
+                return "tempoRitardando"
+            if normalized.startswith("cresc"):
+                return "dynamicCrescendo"
+            if normalized.startswith(("dim", "decresc")):
+                return "dynamicDiminuendo"
+            return f"term{_camel_words(text)}" if text else "xmlWords"
+        return f"xmlDirection{_camel_words(subtype)}"
+    return f"xml{_camel_words(event_type)}{_camel_words(subtype)}"
+
+
 def extract_events(
     root: ET.Element,
     score_id: str,
@@ -315,6 +424,9 @@ def extract_events(
             }
         )
         row.update(values)
+        row["class"] = _xml_event_class(
+            element, event_type, subtype, values
+        )
         mappings = repeat_by_written.get(int(context.get("measure_index", 0)), [])
         within = float(context.get("within", 0.0))
         duration_measures = float(context.get("duration_measures", 0.0))

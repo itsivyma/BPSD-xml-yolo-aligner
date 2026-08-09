@@ -6,9 +6,9 @@ annotations. The same Python pipeline powers both interfaces.
 
 The project creates candidate semantic links and visual QA material. It
 does not assume that a YOLO box and a MusicXML event share an ID, and it
-does not treat geometric proximity as proof. Unsupported or uncertain
-BPS-OMR fields remain blank until they can be verified from source data
-or human review.
+does not treat geometric proximity as proof. Direct MusicXML matches and
+geometry-derived estimates have different statuses, confidence, and review
+requirements.
 
 ## Current capabilities
 
@@ -22,8 +22,10 @@ or human review.
   available, including notes that fall within a BPSD tied span.
 - Match `dynamicF`, `dynamicP`, and `dynamicS` to MusicXML dynamic
   events in page reading order.
-- Preserve `fingering1`–`fingering5` boxes while leaving unsupported
-  semantic links blank by default.
+- Match MusicXML staccato, fermata, slur, tie, ornament, and tuplet evidence;
+  retain lower-confidence assignments as review candidates.
+- Give every YOLO class a start/end time candidate from direct MusicXML
+  evidence or the nearest score anchor, while explicitly marking estimates.
 - Generate slur endpoint candidates and visual QA sheets, including
   scan-only and cross-system cases.
 - Keep confirmed, candidate, unresolved, and scan-only results
@@ -55,7 +57,8 @@ The default policy is conservative:
 - MusicXML-supported values may be written when the correspondence is
   established.
 - Candidate values remain labeled as candidates.
-- Unknown fields stay blank rather than being guessed.
+- Unknown semantic links stay blank rather than being presented as facts;
+  geometry-derived time estimates are populated and marked `review`.
 - `--infer-fingerings` is optional and non-authoritative because the
   current source MusicXML contains no fingering elements.
 - Repeat mapping must be checked before extending the workflow across
@@ -142,10 +145,10 @@ The website returns:
 - validation JSON and a ZIP containing all generated outputs.
 
 Use `source_record_type` in `all_information.csv` to distinguish `yolo`,
-`xml_event`, and `xml_node` rows. Machine-generated fingering links are still
-candidates and must be checked in the overlay. Classes without a supported
-MusicXML matching rule remain in the CSV with unresolved semantic fields
-instead of being discarded.
+`xml_event`, and `xml_node` rows. XML-only events receive readable class names.
+Rows are ordered by `start_meas` and `end_meas`; raw XML nodes without a musical
+time follow the timed symbol rows. Machine-generated fingering and geometric
+fallback links remain candidates and must be checked in the overlay.
 
 Dataset-wide raw alignment remains available through the resumable CLI because
 source score collections can be too large for ordinary browser uploads.
@@ -169,9 +172,10 @@ Run the following command for all available options:
 python bps_xml_alignment.py --help
 ```
 
-The alignment command writes a CSV, QA overlays, and a JSON report to
-the selected output directory. With `--all-symbols`, unsupported
-semantic fields are retained as blank values.
+The alignment command writes a CSV, QA overlays, and a JSON report to the
+selected output directory. With `--all-symbols`, direct MusicXML matches are
+preferred and every remaining class receives a reviewable geometry-derived
+time candidate when a page anchor is available.
 
 ## Slur QA tools
 
@@ -298,8 +302,9 @@ from version control.
 
 ## Current scope
 
-The lossless combined CSV preserves every YOLO bbox and every MusicXML event.
-It does not claim that every YOLO/XML pair is correct: candidate, ambiguous,
+The lossless combined CSV preserves every YOLO bbox and every MusicXML event,
+adds readable XML-only class names, and is sorted by musical start/end time. It
+does not claim that every YOLO/XML pair is correct: candidate, ambiguous,
 unresolved, XML-only, and YOLO-only states remain explicit until reviewed.
 
 ## License

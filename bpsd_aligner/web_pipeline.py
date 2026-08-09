@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import zipfile
+from collections import Counter
 from pathlib import Path
 from typing import Callable
 
@@ -26,7 +27,7 @@ from repeat_mapping import build_repeat_mapping, write_repeat_mapping
 from xml_export import BPS_FIELDS, EVENT_FIELDS, NODE_FIELDS, export_score
 
 
-PIPELINE_VERSION = "0.2.0-web-upload-alignment"
+PIPELINE_VERSION = "0.3.0-all-symbol-time-alignment"
 ProgressCallback = Callable[[int, int, str], None]
 
 
@@ -46,6 +47,36 @@ def _sha256(path: Path) -> str:
 def _read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8-sig") as file:
         return list(csv.DictReader(file))
+
+
+def _time_sort_key(row: dict) -> tuple:
+    def number(value: object, fallback: float) -> float:
+        try:
+            return float(str(value))
+        except (TypeError, ValueError):
+            return fallback
+
+    source = row.get("source_record_type") or row.get("row_origin", "")
+    source_rank = {"yolo": 0, "xml_event": 1, "xml": 1, "xml_node": 2}.get(
+        source, 3
+    )
+    return (
+        number(row.get("start_meas"), float("inf")),
+        number(row.get("end_meas"), float("inf")),
+        source_rank,
+        number(row.get("yolo_line"), float("inf")),
+        str(row.get("class", "")),
+        str(row.get("record_id", "")),
+    )
+
+
+def _sort_csv_by_musical_time(path: Path) -> int:
+    with path.open(newline="", encoding="utf-8-sig") as file:
+        reader = csv.DictReader(file)
+        fields = list(reader.fieldnames or [])
+        rows = sorted(reader, key=_time_sort_key)
+    atomic_write_csv(path, fields, rows)
+    return len(rows)
 
 
 def _report_progress(
@@ -108,6 +139,7 @@ def _build_all_information_csv(
         row.update(
             {
                 source_field: "xml_node",
+                "class": f"xmlNode:{node.get('tag', 'unknown')}",
                 "record_id": node["xml_node_id"],
                 "row_origin": "xml_node",
                 "combined_status": "xml_source_node",
@@ -118,6 +150,7 @@ def _build_all_information_csv(
             }
         )
         rows.append(row)
+    rows.sort(key=_time_sort_key)
     atomic_write_csv(destination, all_fields, rows)
     return len(yolo_rows), len(events), len(nodes)
 
@@ -229,7 +262,9 @@ def _canonical_master_rows(
                 "match_source": detailed.get("match_source", ""),
                 "confidence": detailed.get("confidence", ""),
                 "alignment_status": alignment_status,
-                "review_status": "needs_review",
+                "review_status": (
+                    "not_required" if alignment_status == "matched" else "needs_review"
+                ),
                 "human_approved": "false",
                 "reviewer": "",
                 "reviewed_at": "",
@@ -239,6 +274,8 @@ def _canonical_master_rows(
                 "comment": "",
                 "target_x_px": detailed.get("target_x_px", ""),
                 "target_y_px": detailed.get("target_y_px", ""),
+                "end_target_x_px": detailed.get("end_target_x_px", ""),
+                "end_target_y_px": detailed.get("end_target_y_px", ""),
                 "pipeline_version": PIPELINE_VERSION,
                 "error_code": "",
                 "error_message": "",
@@ -320,6 +357,16 @@ def run_uploaded_alignment(
     )
     detailed_path = Path(alignment_report["outputs"]["detailed_csv"])
     detailed_rows = _read_csv(detailed_path)
+    missing_time_lines = [
+        row.get("txt_line", "")
+        for row in detailed_rows
+        if row.get("start_meas") in {"", "NA", None}
+        or row.get("end_meas") in {"", "NA", None}
+    ]
+    if missing_time_lines:
+        errors.append(
+            "YOLO rows without start/end time: " + ", ".join(missing_time_lines)
+        )
     master_rows = _canonical_master_rows(
         detailed_rows,
         score_id=score_id,
@@ -345,6 +392,13 @@ def run_uploaded_alignment(
     )
     _sanitize_xml_source_paths(nodes, xml_path.name)
     _sanitize_xml_source_paths(events, xml_path.name)
+    missing_xml_classes = [
+        event["xml_event_id"] for event in events if not event.get("class")
+    ]
+    if missing_xml_classes:
+        errors.append(
+            f"XML events without class names: {len(missing_xml_classes)}"
+        )
     xml_dir = output_dir / "xml"
     xml_nodes_path = xml_dir / "xml_nodes.csv"
     xml_events_path = xml_dir / "xml_events.csv"
@@ -358,6 +412,12 @@ def run_uploaded_alignment(
     )
     if not combined_report["passed"]:
         errors.extend(combined_report["validation_errors"])
+
+    sorted_combined_rows = _sort_csv_by_musical_time(
+        combined_dir / "combined_master.csv"
+    )
+    if sorted_combined_rows != combined_report["combined_rows"]:
+        errors.append("Time sorting changed the combined row count")
 
     all_information_path = output_dir / "all_information.csv"
     included_yolo_count, included_event_count, included_node_count = (
@@ -400,11 +460,19 @@ def run_uploaded_alignment(
         "input_counts": input_counts,
         "identity_repeat_mapping": unfolded_xml_path is None,
         "alignment_rows": len(master_rows),
+        "yolo_rows_with_time": len(master_rows) - len(missing_time_lines),
+        "yolo_rows_needing_review": sum(
+            row.get("status") != "matched" for row in detailed_rows
+        ),
+        "yolo_status_counts": dict(
+            Counter(row.get("status", "") for row in detailed_rows)
+        ),
         "xml_node_rows": len(nodes),
         "xml_event_rows": len(events),
         "combined_rows": combined_report["combined_rows"],
         "all_information_rows": len(master_rows) + len(events) + len(nodes),
         "combined_status_counts": combined_report["combined_status_counts"],
+        "sort_order": "start_meas,end_meas,source_record_type,yolo_line,class",
         "warnings": warnings,
         "validation_errors": errors,
         "passed": not errors,

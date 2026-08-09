@@ -59,7 +59,8 @@ dataset commands, whose page checkpoints are persisted on disk.
 
 - **All-information CSV** is the most complete single CSV. Its
   `source_record_type` column identifies `yolo`, `xml_event`, and `xml_node`
-  records.
+  records. Timed YOLO and XML-event rows are ordered by `start_meas` and
+  `end_meas`; untimed raw XML nodes follow them.
 - **Combined event CSV** is easier to analyze as BPS-OMR data. It contains every
   YOLO box and represents every extracted MusicXML event.
 - **Detailed YOLO CSV** contains match source, status, confidence, target staff,
@@ -72,7 +73,14 @@ dataset commands, whose page checkpoints are persisted on disk.
 ## Accuracy boundary
 
 The website preserves all source records, but preservation is different from a
-confirmed match. Dynamics currently have direct MusicXML matching rules.
-Fingering links are optional geometric candidates because the source MusicXML
-does not contain fingering elements. Other classes that lack a confirmed rule
-are retained with unresolved fields for later review rather than guessed.
+confirmed match. Dynamics, staccato, fermata, slur, tie, selected ornaments,
+and tuplets use direct MusicXML evidence. Fingering links are optional geometric
+candidates because the source MusicXML does not contain fingering elements.
+Every remaining YOLO class receives a geometry-derived start/end time candidate
+when a MusicXML note or rest anchor exists. These estimates use `status=review`,
+stay visible in the review table and orange overlay, and are never presented as
+confirmed XML matches.
+
+Every XML event has a readable `class` even when it has no YOLO box. Examples
+include `note`, `rest`, `xmlClef`, `dynamicF`, `articStaccatoAbove`, `slur`, and
+`tie`.

@@ -59,11 +59,12 @@ def _render_completed_job(job: dict) -> None:
         st.error("Outputs were created, but validation found errors.")
         for error in report["validation_errors"]:
             st.error(error)
-    first, second, third, fourth = st.columns(4)
+    first, second, third, fourth, fifth = st.columns(5)
     first.metric("YOLO boxes", report["alignment_rows"])
-    second.metric("XML events", report["xml_event_rows"])
-    third.metric("Combined rows", report["combined_rows"])
-    fourth.metric("Warnings", len(report["warnings"]))
+    second.metric("Timed YOLO", report["yolo_rows_with_time"])
+    third.metric("Needs review", report["yolo_rows_needing_review"])
+    fourth.metric("XML events", report["xml_event_rows"])
+    fifth.metric("Combined rows", report["combined_rows"])
     for warning in report["warnings"]:
         st.warning(warning)
 
@@ -75,6 +76,30 @@ def _render_completed_job(job: dict) -> None:
         st.image(overlays[selected], caption=selected, use_container_width=True)
     else:
         st.info("No review overlay was generated for this input.")
+    st.caption(
+        "Overlay colors: green = direct match; blue = inferred candidate; "
+        "orange = needs review; gray/red = unresolved."
+    )
+
+    with st.expander("Rows needing review"):
+        _fields, detailed_rows = read_csv_bytes(job["detailed_csv"])
+        review_rows = [
+            {
+                "YOLO line": row.get("txt_line", ""),
+                "class": row.get("class", ""),
+                "start": row.get("start_meas", ""),
+                "end": row.get("end_meas", ""),
+                "match source": row.get("match_source", ""),
+                "confidence": row.get("confidence", ""),
+                "status": row.get("status", ""),
+            }
+            for row in detailed_rows
+            if row.get("status") != "matched"
+        ]
+        if review_rows:
+            st.dataframe(review_rows, use_container_width=True)
+        else:
+            st.success("No machine-generated rows are marked for review.")
 
     st.subheader("Download results")
     columns = st.columns(5)

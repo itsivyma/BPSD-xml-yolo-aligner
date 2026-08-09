@@ -12,7 +12,7 @@ def test_help_lists_terminal_and_web_commands(capsys):
 
 def test_version(capsys):
     main(["--version"])
-    assert capsys.readouterr().out.strip() == "0.1.0"
+    assert capsys.readouterr().out.strip() == "0.2.0"
 
 
 def test_help_is_stable():

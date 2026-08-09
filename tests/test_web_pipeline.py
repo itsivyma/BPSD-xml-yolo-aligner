@@ -45,7 +45,11 @@ def _write_uploads(directory: Path) -> dict[str, Path]:
     image.save(image_path)
 
     yolo_path = directory / "page.txt"
-    yolo_path.write_text("18 0.25 0.30 0.03 0.04\n", encoding="utf-8")
+    yolo_path.write_text(
+        "18 0.25 0.30 0.03 0.04\n"
+        "115 0.50 0.15 0.12 0.03\n",
+        encoding="utf-8",
+    )
     xml_path = directory / "score.xml"
     xml_path.write_text(MUSICXML, encoding="utf-8")
     bps_path = directory / "ann_score_note.csv"
@@ -56,7 +60,14 @@ def _write_uploads(directory: Path) -> dict[str, Path]:
     )
     categories_path = directory / "notes.json"
     categories_path.write_text(
-        json.dumps({"categories": [{"id": 18, "name": "dynamicF"}]}),
+        json.dumps(
+            {
+                "categories": [
+                    {"id": 18, "name": "dynamicF"},
+                    {"id": 115, "name": "termDolce"},
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     return {
@@ -83,8 +94,8 @@ def test_uploaded_alignment_preserves_all_sources_and_renders_overlay(tmp_path):
     )
 
     assert report["passed"] is True
-    assert report["alignment_rows"] == 1
-    assert report["input_counts"]["yolo_boxes"] == 1
+    assert report["alignment_rows"] == 2
+    assert report["input_counts"]["yolo_boxes"] == 2
     assert [item[0] for item in progress] == list(range(7))
 
     all_information_path = Path(report["outputs"]["all_information_csv"])
@@ -93,9 +104,19 @@ def test_uploaded_alignment_preserves_all_sources_and_renders_overlay(tmp_path):
     source_types = {row["source_record_type"] for row in rows}
     assert source_types == {"yolo", "xml_event", "xml_node"}
     assert len(rows) == report["all_information_rows"]
-    assert sum(row["source_record_type"] == "yolo" for row in rows) == 1
+    yolo_rows = [row for row in rows if row["source_record_type"] == "yolo"]
+    assert len(yolo_rows) == 2
+    assert all(row["start_meas"] and row["end_meas"] for row in yolo_rows)
+    assert next(row for row in yolo_rows if row["class"] == "termDolce")["review_status"] == "needs_review"
     assert sum(row["source_record_type"] == "xml_event" for row in rows) == report["xml_event_rows"]
     assert sum(row["source_record_type"] == "xml_node" for row in rows) == report["xml_node_rows"]
+    xml_event_rows = [row for row in rows if row["source_record_type"] == "xml_event"]
+    assert all(row["class"] for row in xml_event_rows)
+    assert all(row["class"] for row in rows)
+    timed_rows = [row for row in rows if row["start_meas"] not in {"", "NA"}]
+    assert [float(row["start_meas"]) for row in timed_rows] == sorted(
+        float(row["start_meas"]) for row in timed_rows
+    )
 
     overlay_path = Path(report["outputs"]["all_symbols_overlay"])
     with Image.open(overlay_path) as overlay:

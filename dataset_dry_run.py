@@ -28,7 +28,7 @@ from pipeline_checkpoint import (
 )
 
 
-PIPELINE_VERSION = "0.6.0-dry-run-timeline-calibrated"
+PIPELINE_VERSION = "0.7.0-all-symbol-time-candidates"
 OFFICIAL_FIELDS = [
     "class_id", "x", "y", "w", "h", "class", "musical_time",
     "start_meas", "end_meas", "start_note", "end_note",
@@ -45,7 +45,8 @@ EXTENDED_FIELDS = [
     "match_source", "confidence", "alignment_status", "review_status",
     "human_approved", "reviewer", "reviewed_at", "review_source",
     "original_candidate_json", "corrected_value_json", "comment",
-    "target_x_px", "target_y_px", "pipeline_version", "error_code", "error_message",
+    "target_x_px", "target_y_px", "end_target_x_px", "end_target_y_px",
+    "pipeline_version", "error_code", "error_message",
 ]
 FIELDS = OFFICIAL_FIELDS + EXTENDED_FIELDS
 
