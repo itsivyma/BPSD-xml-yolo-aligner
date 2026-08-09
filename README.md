@@ -95,6 +95,23 @@ bpsd-aligner --help
 
 For development and tests, use `python -m pip install ".[dev]"`.
 
+### macOS editable-install troubleshooting
+
+Use the regular installation above unless you specifically need editable mode.
+If `bpsd-aligner` exists but fails with `ModuleNotFoundError: bpsd_aligner`,
+remove the broken editable installation and install a normal wheel:
+
+```bash
+python -m pip uninstall -y bpsd-xml-yolo-aligner
+python -m pip install .
+python -c "import bpsd_aligner; print(bpsd_aligner.__version__)"
+bpsd-aligner --help
+```
+
+On some macOS/Python 3.14 environments, an editable install's generated
+`.pth` file may receive the macOS hidden flag and be skipped during Python
+startup. A normal installation does not depend on that `.pth` import hook.
+
 ## Terminal and website
 
 Every processing stage is available through one terminal command:
