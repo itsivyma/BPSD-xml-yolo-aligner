@@ -1,0 +1,38 @@
+# Operating systems and editors
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv*/
+venv/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Datasets, uploads, generated outputs, and checkpoints
+data/
+uploads/
+output/
+outputs/
+checkpoints/
+images/
+labels/
+notes.json
+*.sib
+
+# Generated score and QA artifacts
+Beethoven_*.csv
+Beethoven_*.xlsx
+*_QA.png
+*_overlay.png
+review_images/

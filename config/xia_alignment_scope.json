@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "policy": "Pages and systems map directly unless an explicit override applies; scan systems beyond available repetition XML are outside BPSD scope.",
+  "overrides": {
+    "Beethoven_Op109-01-04": {
+      "1": {"xml_page": 4, "xml_systems": [1], "mapping_status": "direct"},
+      "2": {"xml_page": 4, "xml_systems": [2], "mapping_status": "direct"},
+      "3": {"xml_page": 4, "xml_systems": [3], "mapping_status": "direct"},
+      "4": {"xml_page": 4, "xml_systems": [4], "mapping_status": "direct"},
+      "5": {"xml_page": 4, "xml_systems": [5, 6], "mapping_status": "merged_xml_systems"},
+      "6": {"movement_scope_status": "outside_bpsd_scope", "mapping_status": "xml_missing"}
+    }
+  }
+}

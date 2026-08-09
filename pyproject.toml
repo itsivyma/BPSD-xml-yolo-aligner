@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bpsd-xml-yolo-aligner"
+version = "0.1.0"
+description = "Lossless BPSD MusicXML, YOLO, and BPS-OMR alignment with CLI and web UI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2.0,<3.0",
+  "pdfplumber>=0.11.10,<0.12",
+  "pillow>=12.3,<13.0",
+  "pypdf>=6.15,<7.0",
+  "streamlit>=1.40,<2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1,<10.0"]
+
+[project.scripts]
+bpsd-aligner = "bpsd_aligner.cli:main"
+
+[tool.setuptools]
+packages = ["bpsd_aligner"]
+py-modules = [
+  "alignment_review_sheets",
+  "alignment_scope",
+  "apply_human_audit_feedback",
+  "batch_align",
+  "bps_xml_alignment",
+  "build_fingering_audit_batch",
+  "build_review_queue",
+  "combine_yolo_xml",
+  "cross_system_slur_check",
+  "dataset_dry_run",
+  "dataset_inventory",
+  "dynamic_human_review",
+  "evaluate_fingering_profiles",
+  "fermata_batch_check",
+  "fingering_note_check",
+  "pipeline_checkpoint",
+  "reduce_review_queue",
+  "render_audit_contact_sheets",
+  "render_audit_crops",
+  "render_audit_fullres",
+  "render_yolo_overlays",
+  "repeat_mapping",
+  "scan_only_slur_check",
+  "slur_batch_candidates",
+  "slur_batch_endpoint_sheet",
+  "slur_endpoint_check",
+  "staccato_batch_check",
+  "tuplet_batch_check",
+  "xml_export",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
