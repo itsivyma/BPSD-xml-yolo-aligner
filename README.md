@@ -30,8 +30,8 @@ requirements.
   scan-only and cross-system cases.
 - Keep confirmed, candidate, unresolved, and scan-only results
   distinguishable during review.
-- Upload one raw score page through the website and run the same alignment
-  pipeline without preparing intermediate CSV files first.
+- Upload multiple raw score pages through the website and run the same
+  alignment pipeline without preparing intermediate CSV files first.
 - Export a single `all_information.csv` containing every YOLO row, every
   extracted MusicXML event, and every flattened source XML node.
 - Draw all YOLO boxes and alignment labels back onto full-page review images.
@@ -112,6 +112,7 @@ bpsd-aligner align --help
 bpsd-aligner dry-run --help
 bpsd-aligner xml-export --help
 bpsd-aligner combine --help
+bpsd-aligner review-eval --help
 ```
 
 Start the website locally with:
@@ -122,39 +123,82 @@ bpsd-aligner web
 
 Open the local URL shown by Streamlit, normally `http://localhost:8501`.
 
-The **Run alignment** tab accepts one score page per run:
+The **Run alignment** tab accepts one or more score pages per run:
 
-1. score image (`.jpg`, `.jpeg`, or `.png`);
-2. matching YOLO annotation (`.txt`);
+1. score images (`.jpg`, `.jpeg`, or `.png`);
+2. matching YOLO annotations (`.txt`) with the same filename stems;
 3. BPSD written/repetition MusicXML (`.xml` or `.musicxml`);
 4. BPSD `ann_score_note.csv`;
 5. YOLO `notes.json` class map; and
-6. optionally, unfolded MusicXML for a score containing repeats.
+6. optionally, unfolded MusicXML for a score containing repeats; and
+7. preferably, the matching whole-score `score_pdf_repetitions` PDF.
 
-Set **MusicXML page** to the page represented by the uploaded image, then click
-**Align all information**. The page reports each stage as it runs and keeps a
-completed job in the current Streamlit session, so an ordinary UI rerun with
-the same files reuses the in-memory result.
+Page numbers can be inferred from filename suffixes such as `-04`, or assigned
+consecutively from **First MusicXML page**, then corrected directly in the
+pairing table. Click **Align all uploaded pages**. Whole-score MusicXML/repeat
+data is prepared once, while each successful page is checkpointed to a
+fingerprinted job directory. Exact retries resume from disk, and a portable
+checkpoint ZIP can be downloaded and restored with the same input files.
+The server also persists `job_status.json` after each page so operators can
+inspect the last durable stage after a browser or process interruption. Large
+ZIP downloads are opt-in in the UI and are not loaded on every rerun.
+Website alignments run in an independent worker by default, continue after the
+browser closes, wait for a bounded worker slot, and support cooperative
+cancellation between pages. The original synchronous mode remains available
+as a fallback checkbox option.
 
-The website returns:
+The final website CSV is `bps_omr_final.csv`, with exactly one row per YOLO
+bounding box and exactly these columns:
 
-- `yolo_aligned.csv`: one time-sorted row per aligned YOLO box;
-- `xml_events.csv`: standalone time-sorted MusicXML musical events;
-- `yolo_xml_timeline.csv`: every YOLO and XML-event row interleaved by time;
-- `review_queue.csv`: only inferred, ambiguous, or unresolved YOLO rows;
-- `all_information.csv`: every YOLO row, MusicXML event, and raw XML node;
-- `combined_master.csv`: BPS-OMR-oriented YOLO and MusicXML event rows;
-- `alignment_detailed.csv`: box-level matching evidence and confidence;
-- full-page dynamics, fingering, all-symbol, and needs-review overlays, each
+- `class_id`, `x`, `y`, `w`, `h`, `class`, `musical_time`;
+- `start_meas`, `end_meas`, `start_note`, `end_note`, `connected_note`,
+  `stem_dir`;
+- `human_corrected` (`1` only for an applied human correction, otherwise `0`).
+
+Uncertain, unavailable, and not-applicable semantic values are blank. Machine
+review candidates remain visible in the review interface and overlays but are
+not written as confirmed values in the final CSV. The website also returns:
+
+- full-page dynamics, fingering, all-symbol, and needs-review overlays, plus
+  one uncluttered full-page overlay for every YOLO class; each image is
   viewable and downloadable at its original resolution, with stable `Y{line}`
-  labels that map directly back to CSV rows;
-- validation JSON and a ZIP containing all generated outputs.
+  labels that map directly back to CSV rows. Per-class labels also show the
+  written measure range and BPSD start/end time. The website groups review
+  images by score page, shows only the page's needs-review overlay in Overview,
+  and displays all symbols for one selected class at a time;
+- validation JSON and a ZIP containing the final CSV and all review images.
 
-Use `source_record_type` in `all_information.csv` to distinguish `yolo`,
-`xml_event`, and `xml_node` rows. XML-only events receive readable class names.
-Rows are ordered by `start_meas` and `end_meas`; raw XML nodes without a musical
-time follow the timed symbol rows. Machine-generated fingering and geometric
-fallback links remain candidates and must be checked in the overlay.
+For a multi-page website job, the download panel also exposes the complete
+source-preserving outputs: one all-page `yolo_aligned.csv`, one full-score
+`xml_events.csv`, one flattened `xml_nodes.csv`, a time-sorted
+`yolo_xml_timeline.csv`, `all_information.csv`, `combined_master.csv`, and
+`alignment_links.csv`. MusicXML rows are exported once rather than repeated for
+every uploaded page. The strict `bps_omr_final.csv` remains a separate,
+one-row-per-YOLO-box deliverable.
+`xml_spans.csv` pairs whole-score start/stop relationships including cross-page
+slurs and ties. `performance_expanded_timeline.csv` expands repeated passages
+into unfolded performance order.
+
+The completed-job panel provides an image-first Review workspace plus an
+advanced editable table. The workspace shows one symbol at a time with a
+full-page highlight and native-resolution context crop, supports page/class/
+status queues, and checkpoints confirm, correction, scan-only, wrong-class,
+bad-bbox, false-positive, uncertain, and skipped decisions. Checkpoints can be
+downloaded and restored as JSON. Each checkpoint is bound to the exact uploaded
+files, alignment settings, score ID, and pipeline version by a local SHA-256
+fingerprint, so decisions cannot be restored onto a different input batch. The
+Applying review validates time order, note IDs, staff, connected notes, and
+class mappings. It regenerates every corrected CSV, corrected check images, a
+lossless corrections JSON, one corrected-output ZIP, and
+overall/per-class/per-field accuracy computed before applying corrections.
+
+Slurs use segment-aware matching. Same-system slurs are confirmed only when the
+scan/XML geometry is mutual-best with a clear top-two margin. Every printed
+segment of a cross-system slur may share the same complete XML endpoints, but
+cross-system and scan/XML-disagreement cases remain review-only.
+When the clean repetition PDF is supplied, XML noteheads are localized on the
+clean page and transferred measure-locally to the scan before slur/tie scoring.
+Structural mismatches fall back safely and are reported as warnings.
 
 Dataset-wide raw alignment remains available through the resumable CLI because
 source score collections can be too large for ordinary browser uploads.
@@ -306,6 +350,24 @@ images, exported spreadsheets, or other dataset files.
 Machine-specific prototypes and input paths are intentionally excluded
 from version control.
 
+For deployment, mount `BPSD_ALIGNER_JOB_DIR` on persistent storage. Browser
+jobs enforce per-file, total-byte, file-count, decoded-image, and checkpoint
+expansion limits. MusicXML accepts the standard Recordare `DOCTYPE`, while
+entity expansion and external resource resolution remain disabled.
+Per-class auto-accept thresholds can be overridden with
+`BPSD_ALIGNER_THRESHOLDS=/path/to/thresholds.json`.
+
+Set `BPSD_ALIGNER_ACCESS_TOKEN` to a long random secret before exposing the
+Streamlit app outside a trusted machine. Set
+`BPSD_ALIGNER_JOB_RETENTION_HOURS=168` to remove inactive unlocked jobs after
+seven days; cleanup is disabled when the variable is unset. See
+`.env.example` for the supported deployment variables. Public deployments
+still need HTTPS and reverse-proxy rate limiting.
+
+Use `BPSD_ALIGNER_MAX_CONCURRENT_JOBS` to cap simultaneous alignment workers
+(default `2`) and `BPSD_ALIGNER_MAX_PAGES` to cap pages per browser job
+(default `200`). Oversized jobs are rejected before alignment begins.
+
 ## Current scope
 
 The lossless combined CSV preserves every YOLO bbox and every MusicXML event,
@@ -315,9 +377,10 @@ unresolved, XML-only, and YOLO-only states remain explicit until reviewed.
 
 ## License
 
-No software license has been selected yet. Until a license is added,
-copyright law reserves reuse, modification, and redistribution rights
-to the copyright holder.
+The software in this repository is available under the MIT License. See
+[`LICENSE`](LICENSE). This license applies only to the software; it does not
+grant rights to the BPSD dataset, Beethoven score editions, scans, MusicXML,
+YOLO annotations, or other uploaded material.
 
 ## Disclaimer
 

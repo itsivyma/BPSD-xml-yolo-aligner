@@ -30,6 +30,8 @@ from typing import Iterable
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from defusedxml import ElementTree as SafeET
+from bpsd_aligner.thresholds import auto_accept_threshold
 
 
 DYNAMIC_CLASS_BY_GLYPH = {
@@ -93,6 +95,8 @@ DETAILED_OUTPUT_FIELDS = [
     "txt_line",
     "system",
     "xml_measure",
+    "start_xml_measure",
+    "end_xml_measure",
     "xml_symbol",
     "xml_staff",
     "target_type",
@@ -108,6 +112,7 @@ DETAILED_OUTPUT_FIELDS = [
     "target_y_px",
     "end_target_x_px",
     "end_target_y_px",
+    "review_note_candidates_json",
 ]
 
 SLUR_CANDIDATE_FIELDS = [
@@ -355,7 +360,12 @@ def detect_systems(image: Image.Image) -> list[SystemGeometry]:
             neighborhood = gray[max(0, row - 1) : min(height, row + 2), :]
             votes += (neighborhood < 190).any(axis=0)
 
-        candidate_columns = votes >= 6
+        # A genuine staff can be interrupted by dense chords, accidentals,
+        # damage, or compression. Requiring six of ten sampled staff rows made
+        # the left half of Op90 p2 disappear and shifted every XML notehead to
+        # the right. Three agreeing rows over a sustained horizontal run still
+        # reject isolated stems while preserving partially obscured staves.
+        candidate_columns = votes >= 3
         smoothed = np.convolve(
             candidate_columns.astype(int),
             np.ones(31, dtype=int),
@@ -618,10 +628,27 @@ def _measure_number(measure: ET.Element, fallback: int) -> int:
     return int(digits) if digits else fallback
 
 
-def parse_musicxml_page(xml_path: Path, page_number: int = 1) -> dict:
-    """Parse layout, dynamics and note events for one MusicXML page."""
+def parse_musicxml_page(
+    xml_path: Path,
+    page_number: int = 1,
+    *,
+    system_start_measures: list[int] | None = None,
+    page_end_measure: int | None = None,
+) -> dict:
+    """Parse score events for one scanned page.
 
-    root = ET.parse(xml_path).getroot()
+    MusicXML page and system breaks are edition-specific and can differ from
+    the scanned score.  When ``system_start_measures`` is supplied, those
+    printed measure numbers define the systems on the scanned page while the
+    note semantics still come from the corresponding MusicXML measures.
+    """
+
+    root = SafeET.parse(
+        xml_path,
+        forbid_dtd=False,
+        forbid_entities=True,
+        forbid_external=True,
+    ).getroot()
     part = next(
         element for element in root.iter() if _local_name(element.tag) == "part"
     )
@@ -949,15 +976,101 @@ def parse_musicxml_page(xml_path: Path, page_number: int = 1) -> dict:
             }
         )
 
-    page_measures = [
+    xml_layout_measures = [
         measure for measure in raw_measures if measure["page"] == page_number
     ]
-    if not page_measures:
-        raise ValueError(f"MusicXML page {page_number} does not exist")
     first_measure = raw_measures[0]
     score_has_pickup = (
         first_measure["actual_duration"] < first_measure["nominal_duration"]
     )
+    anchors = list(system_start_measures or [])
+    if anchors:
+        if any(not isinstance(value, int) or value < 1 for value in anchors):
+            raise ValueError("Scan system-start measures must be positive integers")
+        if anchors != sorted(set(anchors)):
+            raise ValueError(
+                "Scan system-start measures must be strictly increasing"
+            )
+        if page_end_measure is None:
+            if not xml_layout_measures:
+                raise ValueError(f"MusicXML page {page_number} does not exist")
+            last_xml_system = max(
+                int(measure["system"]) for measure in xml_layout_measures
+            )
+            last_system_measures = [
+                measure
+                for measure in xml_layout_measures
+                if int(measure["system"]) == last_xml_system
+            ]
+            pickup_count = sum(
+                measure["measure_index"] == 1 and score_has_pickup
+                for measure in last_system_measures
+            )
+            page_end_measure = (
+                anchors[-1] + len(last_system_measures) - pickup_count - 1
+            )
+        if page_end_measure < anchors[-1]:
+            raise ValueError(
+                "The scanned page end measure cannot precede its last system start"
+            )
+
+        xml_system_numbers = sorted(
+            {int(measure["system"]) for measure in xml_layout_measures}
+        )
+        if len(xml_system_numbers) != len(anchors):
+            raise ValueError(
+                f"MusicXML page {page_number} has {len(xml_system_numbers)} systems, "
+                f"but {len(anchors)} printed system anchors were supplied"
+            )
+
+        page_measures = []
+        for system_index, (xml_system, printed_start) in enumerate(
+            zip(xml_system_numbers, anchors, strict=True), start=1
+        ):
+            printed_end = (
+                anchors[system_index] - 1
+                if system_index < len(anchors)
+                else page_end_measure
+            )
+            xml_system_measures = [
+                measure
+                for measure in xml_layout_measures
+                if int(measure["system"]) == xml_system
+            ]
+            pickup_count = sum(
+                measure["measure_index"] == 1 and score_has_pickup
+                for measure in xml_system_measures
+            )
+            printed_count = printed_end - printed_start + 1
+            if len(xml_system_measures) != printed_count + pickup_count:
+                raise ValueError(
+                    f"Scanned system {system_index} spans printed measures "
+                    f"{printed_start}-{printed_end} ({printed_count} measures), "
+                    f"but MusicXML system {xml_system} contains "
+                    f"{len(xml_system_measures) - pickup_count} numbered measures"
+                )
+            system_measures = []
+            for local_index, measure in enumerate(xml_system_measures):
+                system_measures.append(
+                    {
+                        **measure,
+                        "page": page_number,
+                        "system": system_index,
+                        "printed_measure": (
+                            printed_start + local_index - pickup_count
+                        ),
+                    }
+                )
+            page_measures.extend(system_measures)
+        layout_source = "scan_printed_measure_anchors"
+    else:
+        page_measures = [
+            {**measure, "printed_measure": measure["measure"]}
+            for measure in xml_layout_measures
+        ]
+        layout_source = "musicxml_page_layout"
+    if not page_measures:
+        raise ValueError(f"MusicXML page {page_number} does not exist")
     # BPSD starts a complete first measure at 1.000, while an anacrusis uses
     # measure 0. This must follow document order, not the displayed measure
     # number, which may be non-numeric or independently renumbered.
@@ -992,6 +1105,7 @@ def parse_musicxml_page(xml_path: Path, page_number: int = 1) -> dict:
                     "page": page_number,
                     "system": measure["system"],
                     "xml_measure": measure["measure"],
+                    "printed_measure": measure["printed_measure"],
                     "xml_measure_index": measure["measure_index"],
                     "timeline_offset": timeline_offset,
                     "measure_within": within,
@@ -1018,6 +1132,7 @@ def parse_musicxml_page(xml_path: Path, page_number: int = 1) -> dict:
                     "page": page_number,
                     "system": measure["system"],
                     "xml_measure": measure["measure"],
+                    "printed_measure": measure["printed_measure"],
                     "xml_measure_index": measure["measure_index"],
                     "timeline_offset": timeline_offset,
                     "measure_within": within,
@@ -1044,6 +1159,7 @@ def parse_musicxml_page(xml_path: Path, page_number: int = 1) -> dict:
                     "page": page_number,
                     "system": measure["system"],
                     "xml_measure": measure["measure"],
+                    "printed_measure": measure["printed_measure"],
                     "xml_measure_index": measure["measure_index"],
                     "timeline_offset": timeline_offset,
                     "measure_within": within,
@@ -1062,6 +1178,11 @@ def parse_musicxml_page(xml_path: Path, page_number: int = 1) -> dict:
         "rests": rests,
         "dynamics": dynamics,
         "system_widths": dict(system_widths),
+        "layout_source": layout_source,
+        "system_start_measures": anchors,
+        "page_end_measure": (
+            page_end_measure if anchors else page_measures[-1]["printed_measure"]
+        ),
     }
 
 
@@ -1568,6 +1689,129 @@ def note_pixel_position(
     return x, y
 
 
+def attach_review_note_candidates(
+    rows: list[dict],
+    xml_notes: list[dict],
+    systems: list[SystemGeometry],
+    image_width: int,
+    image_height: int,
+    measure_x_maps: dict[tuple[int, int], dict] | None = None,
+    note_x_overrides: dict[int, float] | None = None,
+    *,
+    limit: int = 64,
+) -> None:
+    """Attach human-readable XML note choices to every YOLO row.
+
+    Span symbols receive the complete page note index so either endpoint can be
+    selected across systems. Point symbols retain a bounded local index.
+    """
+
+    systems_by_number = {system.number: system for system in systems}
+    notes_by_system: dict[int, list[dict]] = defaultdict(list)
+    for note in xml_notes:
+        if note.get("system") in systems_by_number:
+            notes_by_system[note["system"]].append(note)
+    note_x_overrides = note_x_overrides or {}
+
+    for row in rows:
+        try:
+            system_number = int(row.get("system", ""))
+            box_x = float(row.get("x", 0.5)) * image_width
+            box_y = float(row.get("y", 0.5)) * image_height
+        except (TypeError, ValueError):
+            row["review_note_candidates_json"] = "[]"
+            continue
+        system = systems_by_number.get(system_number)
+        if system is None:
+            row["review_note_candidates_json"] = "[]"
+            continue
+
+        candidates = []
+        seen = set()
+        candidate_notes = (
+            xml_notes
+            if str(row.get("target_type", "")) == "span"
+            else notes_by_system.get(system_number, [])
+        )
+        for note in candidate_notes:
+            note_system = systems_by_number.get(note.get("system"))
+            if note_system is None:
+                continue
+            note_id = note.get("note_id")
+            time = note.get("bps_time")
+            key = (
+                note.get("xml_note_sequence"),
+                str(note_id),
+                round(float(time), 6) if time is not None else None,
+                note.get("staff"),
+                note.get("pitch_name"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            note_x, note_y = note_pixel_position(
+                note, note_system, measure_x_maps=measure_x_maps
+            )
+            sequence = note.get("xml_note_sequence")
+            if sequence in note_x_overrides:
+                note_x = note_x_overrides[sequence]
+            dx = abs(box_x - note_x)
+            dy = abs(box_y - note_y)
+            candidates.append(
+                {
+                    "note_id": note_id,
+                    "start_meas": f"{float(time):.3f}" if time is not None else "",
+                    "end_meas": f"{float(time):.3f}" if time is not None else "",
+                    "connected_note": json.dumps(
+                        [note_id] if note_id is not None else []
+                    ),
+                    "pitch": note.get("pitch_name", ""),
+                    "xml_measure": note.get("xml_measure", ""),
+                    "printed_measure": note.get(
+                        "printed_measure", note.get("xml_measure", "")
+                    ),
+                    "staff": note.get("staff", ""),
+                    "xml_note_sequence": note.get("xml_note_sequence", ""),
+                    "x_px": round(note_x, 1),
+                    "y_px": round(note_y, 1),
+                    "distance_px": round(dx + 0.75 * dy, 1),
+                }
+            )
+        measure_groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        for candidate in candidates:
+            measure_groups[
+                (str(candidate["printed_measure"]), str(candidate["staff"]))
+            ].append(candidate)
+        for measure_candidates in measure_groups.values():
+            measure_candidates.sort(
+                key=lambda candidate: (
+                    candidate["x_px"],
+                    candidate["y_px"],
+                    str(candidate["note_id"]),
+                )
+            )
+            for order, candidate in enumerate(measure_candidates, start=1):
+                candidate["measure_note_order"] = order
+
+        candidates.sort(
+            key=lambda candidate: (
+                candidate["distance_px"],
+                candidate["x_px"],
+                candidate["y_px"],
+            )
+        )
+        selected_candidates = (
+            candidates
+            if str(row.get("target_type", "")) == "span"
+            else candidates[:limit]
+        )
+        row["review_note_candidates_json"] = json.dumps(
+            selected_candidates,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+
 def build_measure_local_x_maps(
     image: Image.Image,
     systems: list[SystemGeometry],
@@ -1656,6 +1900,171 @@ def build_measure_local_x_maps(
                 }
             )
     return maps, diagnostics
+
+
+def build_clean_reference_geometry(
+    image: Image.Image,
+    systems: list[SystemGeometry],
+    clean_image: Image.Image,
+    xml_page: dict,
+) -> tuple[dict[tuple[int, int], dict], dict[int, float], list[dict]]:
+    """Use a clean repetition-layout page as scan geometry reference.
+
+    The clean page supplies system and barline positions.  Noteheads are first
+    snapped on that page, transferred measure-locally to the scan, then snapped
+    once more on the scan.  Any structural mismatch returns an empty result so
+    callers can safely fall back to MusicXML-width geometry.
+    """
+
+    measures_by_system: dict[int, list[dict]] = defaultdict(list)
+    for measure in xml_page.get("measures", []):
+        measures_by_system[measure["system"]].append(measure)
+    ordered_systems = sorted(systems, key=lambda item: item.number)
+    try:
+        clean_systems = sorted(
+            detect_systems(clean_image), key=lambda item: item.number
+        )
+    except ValueError as error:
+        return {}, {}, [
+            {
+                "source": "clean_repetition_pdf",
+                "status": "fallback_clean_system_detection_failed",
+                "error": str(error),
+            }
+        ]
+    if len(clean_systems) != len(ordered_systems):
+        return {}, {}, [
+            {
+                "source": "clean_repetition_pdf",
+                "status": "fallback_clean_system_count_mismatch",
+                "scan_systems": len(ordered_systems),
+                "clean_systems": len(clean_systems),
+            }
+        ]
+    if any(system.number not in measures_by_system for system in ordered_systems):
+        return {}, {}, [
+            {
+                "source": "clean_repetition_pdf",
+                "status": "fallback_xml_system_count_mismatch",
+            }
+        ]
+
+    expected_counts = [
+        len(measures_by_system[system.number]) + 1 for system in ordered_systems
+    ]
+    try:
+        clean_boundaries = detect_barlines(
+            clean_image, clean_systems, expected_counts
+        )
+        aligned_boundaries = align_barlines_from_reference(
+            image, ordered_systems, clean_systems, clean_boundaries
+        )
+    except (ValueError, IndexError) as error:
+        return {}, {}, [
+            {
+                "source": "clean_repetition_pdf",
+                "status": "fallback_clean_barline_alignment_failed",
+                "error": f"{type(error).__name__}: {error}",
+            }
+        ]
+
+    scan_maps: dict[tuple[int, int], dict] = {}
+    clean_maps: dict[tuple[int, int], dict] = {}
+    diagnostics: list[dict] = []
+    for scan_system, clean_system, scan_bounds, clean_bounds in zip(
+        ordered_systems, clean_systems, aligned_boundaries, clean_boundaries
+    ):
+        for measure_index in range(len(clean_bounds) - 1):
+            scan_left = scan_bounds[measure_index]
+            scan_right = scan_bounds[measure_index + 1]
+            clean_left = clean_bounds[measure_index]
+            clean_right = clean_bounds[measure_index + 1]
+            if scan_right["x"] <= scan_left["x"] or clean_right <= clean_left:
+                return {}, {}, [
+                    {
+                        "source": "clean_repetition_pdf",
+                        "system": scan_system.number,
+                        "measure_index": measure_index,
+                        "status": "fallback_nonincreasing_boundaries",
+                    }
+                ]
+            key = (scan_system.number, measure_index)
+            scan_maps[key] = {
+                "left_x": float(scan_left["x"]),
+                "right_x": float(scan_right["x"]),
+                "left_status": scan_left["status"],
+                "right_status": scan_right["status"],
+            }
+            clean_maps[key] = {
+                "left_x": float(clean_left),
+                "right_x": float(clean_right),
+            }
+            diagnostics.append(
+                {
+                    "source": "clean_repetition_pdf",
+                    "system": scan_system.number,
+                    "measure_index": measure_index,
+                    "status": "mapped",
+                    "left_x": scan_left["x"],
+                    "right_x": scan_right["x"],
+                    "left_boundary_status": scan_left["status"],
+                    "right_boundary_status": scan_right["status"],
+                }
+            )
+
+    scan_systems_by_number = {system.number: system for system in ordered_systems}
+    clean_systems_by_number = {system.number: system for system in clean_systems}
+    note_x_overrides: dict[int, float] = {}
+    for note in xml_page.get("notes", []):
+        sequence = note.get("xml_note_sequence")
+        key = (note.get("system"), note.get("system_measure_index"))
+        if sequence is None or key not in clean_maps or key not in scan_maps:
+            continue
+        clean_system = clean_systems_by_number.get(note["system"])
+        scan_system = scan_systems_by_number.get(note["system"])
+        if clean_system is None or scan_system is None:
+            continue
+        clean_x, clean_y = note_pixel_position(note, clean_system, clean_maps)
+        clean_staff = clean_system.upper if note.get("staff", 1) == 1 else clean_system.lower
+        clean_snap = snap_notehead_x(
+            clean_image,
+            clean_x,
+            clean_y,
+            clean_staff,
+            search_radius=max(12, round(clean_staff.line_spacing * 2.4)),
+        )
+        if clean_snap["ink_count"] < max(6, round(clean_staff.line_spacing * 0.6)):
+            continue
+        clean_map = clean_maps[key]
+        within = (clean_snap["x"] - clean_map["left_x"]) / max(
+            clean_map["right_x"] - clean_map["left_x"], 1
+        )
+        if not -0.08 <= within <= 1.08:
+            continue
+        scan_map = scan_maps[key]
+        scan_x = scan_map["left_x"] + min(1.0, max(0.0, within)) * (
+            scan_map["right_x"] - scan_map["left_x"]
+        )
+        _rough_x, scan_y = note_pixel_position(note, scan_system, scan_maps)
+        scan_staff = scan_system.upper if note.get("staff", 1) == 1 else scan_system.lower
+        scan_snap = snap_notehead_x(
+            image,
+            scan_x,
+            scan_y,
+            scan_staff,
+            search_radius=max(12, round(scan_staff.line_spacing * 2.4)),
+        )
+        if scan_snap["ink_count"] >= max(6, round(scan_staff.line_spacing * 0.6)):
+            note_x_overrides[int(sequence)] = float(scan_snap["x"])
+
+    diagnostics.append(
+        {
+            "source": "clean_repetition_pdf",
+            "status": "noteheads_snapped",
+            "note_x_overrides": len(note_x_overrides),
+        }
+    )
+    return scan_maps, note_x_overrides, diagnostics
 
 
 def snap_notehead_x(
@@ -1999,7 +2408,9 @@ def match_fingerings(
             confidence = min(confidence, 0.69)
         status = (
             "inferred"
-            if confidence >= FINGERING_AUTO_ACCEPT_THRESHOLD
+            if confidence >= auto_accept_threshold(
+                box["class"], FINGERING_AUTO_ACCEPT_THRESHOLD
+            )
             else "review"
         )
 
@@ -2187,6 +2598,8 @@ def _row_from_anchors(
             ),
             "connected_note": json.dumps(note_ids) if note_ids else "NA",
             "xml_measure": start_event["xml_measure"],
+            "start_xml_measure": start_event["xml_measure"],
+            "end_xml_measure": end_event["xml_measure"],
             "xml_symbol": xml_symbol,
             "xml_staff": start_event.get("staff", ""),
             "target_type": (
@@ -2333,7 +2746,12 @@ def match_point_notations(
         count_equal = len(rule_boxes) == len(targets)
         for box, target, pair_cost in _greedy_pairs(rule_boxes, targets, cost):
             confidence = min(0.99, max(0.20, math.exp(-3.0 * pair_cost)))
-            status = "matched" if count_equal and confidence >= 0.65 else "review"
+            status = (
+                "matched"
+                if count_equal
+                and confidence >= auto_accept_threshold(box["class"], 0.65)
+                else "review"
+            )
             output.append(
                 _row_from_anchors(
                     box,
@@ -2370,6 +2788,106 @@ def _find_candidate_note(
     return min(candidates, key=lambda note: abs(note["bps_time"] - float(bps_time)))
 
 
+def _slur_target_segments(
+    target: dict,
+    systems_by_number: dict[int, SystemGeometry],
+) -> list[dict]:
+    """Expand one XML slur into one scan target per printed system segment."""
+
+    start = target["start"]
+    end = target["end"]
+    start_system = int(start["event"]["system"])
+    end_system = int(end["event"]["system"])
+    low, high = sorted((start_system, end_system))
+    orientation = target["candidate"].get("orientation") or "over"
+    segments = []
+    for system_number in range(low, high + 1):
+        system = systems_by_number.get(system_number)
+        if system is None:
+            continue
+        if start_system == end_system:
+            segment_type = "full"
+            x0, y0 = start["x"], start["y"]
+            x1, y1 = end["x"], end["y"]
+        elif system_number == start_system:
+            segment_type = "start"
+            x0, y0 = start["x"], start["y"]
+            x1, y1 = system.x_right, start["y"]
+        elif system_number == end_system:
+            segment_type = "end"
+            x0, y0 = system.x_left, end["y"]
+            x1, y1 = end["x"], end["y"]
+        else:
+            segment_type = "middle"
+            x0, x1 = system.x_left, system.x_right
+            y0 = y1 = system.upper.center
+        staff_spacings = [
+            system.upper.line_spacing,
+            system.lower.line_spacing,
+        ]
+        segments.append(
+            {
+                **target,
+                "segment_type": segment_type,
+                "segment_system": system_number,
+                "segment_x0": min(x0, x1),
+                "segment_x1": max(x0, x1),
+                "segment_y0": y0,
+                "segment_y1": y1,
+                "staff_spacing": sum(staff_spacings) / len(staff_spacings),
+                "orientation": orientation,
+            }
+        )
+    return segments
+
+
+def _slur_segment_score(
+    box: dict,
+    target: dict,
+    box_system: int,
+    image_width: int,
+    image_height: int,
+) -> float:
+    """Return conservative scan/XML slur compatibility in the range [0, 1]."""
+
+    if int(target["segment_system"]) != int(box_system):
+        return 0.0
+    box_center_x = box["x"] * image_width
+    box_center_y = box["y"] * image_height
+    box_width = box["w"] * image_width
+    predicted_center_x = (target["segment_x0"] + target["segment_x1"]) / 2
+    predicted_span = max(8.0, target["segment_x1"] - target["segment_x0"])
+    x_error = abs(box_center_x - predicted_center_x)
+    x_tolerance = max(18.0, predicted_span * 0.35)
+    x_center_score = math.exp(-0.5 * (x_error / x_tolerance) ** 2)
+
+    width_ratio = max(0.05, box_width / predicted_span)
+    width_score = math.exp(-abs(math.log(width_ratio)) / 0.65)
+
+    spacing = max(1.0, float(target["staff_spacing"]))
+    if target["orientation"] == "under":
+        note_side_y = max(target["segment_y0"], target["segment_y1"])
+        expected_y = note_side_y + min(
+            max(spacing * 1.1, predicted_span * 0.38), spacing * 3.5
+        )
+        wrong_side = max(0.0, note_side_y - box_center_y)
+    else:
+        note_side_y = min(target["segment_y0"], target["segment_y1"])
+        expected_y = note_side_y - min(
+            max(spacing * 1.1, predicted_span * 0.38), spacing * 3.5
+        )
+        wrong_side = max(0.0, box_center_y - note_side_y)
+    vertical_error = abs(box_center_y - expected_y)
+    vertical_score = math.exp(-0.5 * (vertical_error / (spacing * 2.0)) ** 2)
+    orientation_score = math.exp(-wrong_side / spacing)
+    return (
+        0.42 * x_center_score
+        + 0.28 * width_score
+        + 0.23 * vertical_score
+        + 0.07 * orientation_score
+    )
+
+
 def match_xml_spans(
     boxes: list[dict],
     xml_notes: list[dict],
@@ -2378,6 +2896,7 @@ def match_xml_spans(
     image_width: int,
     image_height: int,
     measure_x_maps: dict[tuple[int, int], dict] | None = None,
+    note_x_overrides: dict[int, float] | None = None,
 ) -> list[dict]:
     """Match YOLO slur/tie boxes to paired MusicXML endpoints."""
 
@@ -2423,21 +2942,47 @@ def match_xml_spans(
                 )
             if start is None or end is None:
                 continue
+            start_anchor = _anchor(start, systems_by_number, measure_x_maps)
+            end_anchor = _anchor(end, systems_by_number, measure_x_maps)
+            if note_x_overrides:
+                start_sequence = start.get("xml_note_sequence")
+                end_sequence = end.get("xml_note_sequence")
+                if start_sequence in note_x_overrides:
+                    start_anchor["x"] = note_x_overrides[start_sequence]
+                if end_sequence in note_x_overrides:
+                    end_anchor["x"] = note_x_overrides[end_sequence]
             targets_by_class[class_name].append(
                 {
                     "candidate": candidate,
-                    "start": _anchor(start, systems_by_number, measure_x_maps),
-                    "end": _anchor(end, systems_by_number, measure_x_maps),
+                    "start": start_anchor,
+                    "end": end_anchor,
                 }
             )
 
     output = []
     for class_name in ("slur", "tie"):
         class_boxes = [box for box in boxes if box["class"] == class_name]
-        targets = targets_by_class[class_name]
+        base_targets = targets_by_class[class_name]
+        targets = (
+            [
+                segment
+                for target in base_targets
+                for segment in _slur_target_segments(target, systems_by_number)
+            ]
+            if class_name == "slur"
+            else base_targets
+        )
 
         def cost(box: dict, target: dict) -> float:
             box_system = assign_system(box, systems, image_height)
+            if class_name == "slur":
+                return 1.0 - _slur_segment_score(
+                    box,
+                    target,
+                    box_system,
+                    image_width,
+                    image_height,
+                )
             start, end = target["start"], target["end"]
             if box_system not in {
                 start["event"]["system"],
@@ -2463,14 +3008,59 @@ def match_xml_spans(
                 + 0.25
             )
 
-        count_equal = len(class_boxes) == len(targets)
         for box, target, pair_cost in _greedy_pairs(class_boxes, targets, cost):
-            confidence = min(0.99, max(0.20, math.exp(-3.0 * pair_cost)))
+            if class_name == "slur":
+                confidence = max(0.0, min(0.99, 1.0 - pair_cost))
+                if confidence < 0.42:
+                    continue
+                ranked_for_box = [
+                    (
+                        1.0 - cost(box, option),
+                        option,
+                    )
+                    for option in targets
+                    if int(option["segment_system"])
+                    == assign_system(box, systems, image_height)
+                ]
+                ranked_for_box.sort(key=lambda item: item[0], reverse=True)
+                best_target = ranked_for_box[0][1] if ranked_for_box else None
+                second_score = (
+                    ranked_for_box[1][0] if len(ranked_for_box) > 1 else 0.0
+                )
+                margin = confidence - second_score
+                feasible_boxes = [
+                    candidate_box
+                    for candidate_box in class_boxes
+                    if assign_system(candidate_box, systems, image_height)
+                    == int(target["segment_system"])
+                ]
+                mutual_best = bool(feasible_boxes) and min(
+                    feasible_boxes, key=lambda candidate_box: cost(candidate_box, target)
+                ) is box
+                box_best = best_target is target
+            else:
+                confidence = min(0.99, max(0.20, math.exp(-3.0 * pair_cost)))
+                margin = 1.0
+                mutual_best = True
+                box_best = True
             candidate = target["candidate"]
             confirmed = candidate["status"] == "time_confirmed"
             status = (
                 "matched"
-                if confirmed and count_equal and confidence >= 0.60
+                if (
+                    confirmed
+                    and confidence
+                    >= auto_accept_threshold(
+                        class_name, 0.82 if class_name == "slur" else 0.60
+                    )
+                    and margin >= (0.12 if class_name == "slur" else 0.0)
+                    and mutual_best
+                    and box_best
+                    and (
+                        class_name != "slur"
+                        or target.get("segment_type") == "full"
+                    )
+                )
                 else "review"
             )
             output.append(
@@ -2478,7 +3068,11 @@ def match_xml_spans(
                     box,
                     target["start"],
                     target["end"],
-                    match_source=f"musicxml_{class_name}_endpoints",
+                    match_source=(
+                        f"musicxml_slur_{target.get('segment_type', 'full')}_endpoint_candidate"
+                        if class_name == "slur"
+                        else "musicxml_tie_endpoints"
+                    ),
                     confidence=confidence,
                     status=status,
                     xml_symbol=class_name,
@@ -2560,7 +3154,12 @@ def match_tuplets(
                 end,
                 match_source="musicxml_tuplet_group",
                 confidence=confidence,
-                status="matched" if count_equal and confidence >= 0.60 else "review",
+                status=(
+                    "matched"
+                    if count_equal
+                    and confidence >= auto_accept_threshold(box["class"], 0.60)
+                    else "review"
+                ),
                 xml_symbol=f"tuplet{group['actual_notes']}",
             )
         )
@@ -2843,6 +3442,18 @@ def draw_overlay(
                 f"{row['start_meas']}-{row['end_meas']} "
                 f"{row['status']}"
             )
+        elif mode == "class":
+            start_written = row.get("start_xml_measure") or row.get("xml_measure", "")
+            end_written = row.get("end_xml_measure") or start_written
+            written_range = (
+                start_written
+                if str(start_written) == str(end_written)
+                else f"{start_written}-{end_written}"
+            )
+            label = (
+                f"Y{row['txt_line']} m{written_range} "
+                f"t={row['start_meas']}-{row['end_meas']} {row['status']}"
+            )
         elif is_dynamic:
             label = (
                 f"{row['class']} m{row['xml_measure']} "
@@ -2960,6 +3571,9 @@ def run_alignment(
     notes_json_path: Path | None = None,
     include_all_symbols: bool = False,
     repeat_mapping_path: Path | None = None,
+    clean_image_path: Path | None = None,
+    system_start_measures: list[int] | None = None,
+    page_end_measure: int | None = None,
 ) -> dict:
     image = Image.open(image_path).convert("RGB")
     systems = detect_systems(image)
@@ -2980,10 +3594,39 @@ def run_alignment(
             else box["class_id"] in TARGET_CLASSES
         )
     ]
-    xml_page = parse_musicxml_page(xml_path, page_number=page_number)
-    measure_x_maps, measure_x_diagnostics = build_measure_local_x_maps(
-        image, systems, xml_page
+    if system_start_measures and len(system_start_measures) != len(systems):
+        raise ValueError(
+            "The scan has "
+            f"{len(systems)} detected systems, but "
+            f"{len(system_start_measures)} printed-measure anchors were supplied"
+        )
+    xml_page = parse_musicxml_page(
+        xml_path,
+        page_number=page_number,
+        system_start_measures=system_start_measures,
+        page_end_measure=page_end_measure,
     )
+    clean_reference_requested = clean_image_path is not None
+    clean_reference_used = False
+    note_x_overrides: dict[int, float] = {}
+    if clean_image_path is not None:
+        clean_image = Image.open(clean_image_path).convert("RGB")
+        measure_x_maps, note_x_overrides, measure_x_diagnostics = (
+            build_clean_reference_geometry(image, systems, clean_image, xml_page)
+        )
+        clean_reference_used = bool(measure_x_maps)
+    else:
+        measure_x_maps = {}
+        measure_x_diagnostics = []
+    if not measure_x_maps:
+        fallback_maps, fallback_diagnostics = build_measure_local_x_maps(
+            image, systems, xml_page
+        )
+        measure_x_maps = fallback_maps
+        measure_x_diagnostics = [
+            *measure_x_diagnostics,
+            *fallback_diagnostics,
+        ]
     bps_notes = load_bps_notes(bps_note_path)
     if repeat_mapping_path is not None:
         with repeat_mapping_path.open(newline="", encoding="utf-8") as file:
@@ -3037,6 +3680,7 @@ def run_alignment(
             image.width,
             image.height,
             measure_x_maps=measure_x_maps,
+            note_x_overrides=note_x_overrides,
         ):
             rows_by_line[int(row["txt_line"])] = row
         for row in match_tuplets(
@@ -3085,6 +3729,15 @@ def run_alignment(
             key=lambda row: int(row["txt_line"]),
         )
 
+    attach_review_note_candidates(
+        rows,
+        xml_page["notes"],
+        systems,
+        image.width,
+        image.height,
+        measure_x_maps=measure_x_maps,
+    )
+
     qa_dir = output_dir / "qa"
     page_stem = image_path.stem
     csv_filename = (
@@ -3112,6 +3765,25 @@ def run_alignment(
             review_overlay,
             mode="all",
         )
+
+    class_overlays = {}
+    if include_all_symbols:
+        rows_by_class = defaultdict(list)
+        for row in rows:
+            rows_by_class[row["class"]].append(row)
+        used_slugs = set()
+        for class_name, class_rows in sorted(rows_by_class.items()):
+            base_slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", class_name).strip("-._")
+            base_slug = base_slug or "unknown"
+            slug = base_slug
+            suffix = 2
+            while slug in used_slugs:
+                slug = f"{base_slug}-{suffix}"
+                suffix += 1
+            used_slugs.add(slug)
+            overlay_path = qa_dir / f"{page_stem}_class_{slug}.png"
+            draw_overlay(image, class_rows, overlay_path, mode="class")
+            class_overlays[f"class_{slug}_overlay"] = str(overlay_path)
 
     counts = defaultdict(lambda: defaultdict(int))
     for row in rows:
@@ -3141,6 +3813,11 @@ def run_alignment(
             dynamicf_ground_truth,
         ),
         "musicxml_page_notes": len(xml_page["notes"]),
+        "score_layout": {
+            "source": xml_page["layout_source"],
+            "system_start_measures": xml_page["system_start_measures"],
+            "page_end_measure": xml_page["page_end_measure"],
+        },
         "musicxml_page_notes_with_bps_id": sum(
             note.get("note_id") is not None for note in xml_page["notes"]
         ),
@@ -3150,12 +3827,18 @@ def run_alignment(
             "mapped_measures": len(measure_x_maps),
             "diagnostics": measure_x_diagnostics,
         },
+        "clean_reference": {
+            "requested": clean_reference_requested,
+            "used": clean_reference_used,
+            "snapped_noteheads": len(note_x_overrides),
+        },
         "fingering_mode": (
             "inferred_candidates"
             if infer_fingerings
             else "strict_blank_unknowns"
         ),
         "include_all_symbols": include_all_symbols,
+        "class_overlay_count": len(class_overlays),
         "limitations": (
             [
                 "Direct XML notation matching covers dynamics, staccato, fermata, slur, tie, ornaments, and tuplets.",
@@ -3190,6 +3873,7 @@ def run_alignment(
             "review_overlay": (
                 str(review_overlay) if include_all_symbols else None
             ),
+            **class_overlays,
         },
     }
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3212,6 +3896,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repeat-mapping", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--page", type=int, default=1)
+    parser.add_argument(
+        "--system-start-measures",
+        help=(
+            "Comma-separated printed first measure for every scanned system; "
+            "for example 198,202,206,211,223,235."
+        ),
+    )
+    parser.add_argument(
+        "--page-end-measure",
+        type=int,
+        help="Printed final measure on the scanned page.",
+    )
     parser.add_argument("--dynamicf-ground-truth", type=Path)
     parser.add_argument(
         "--infer-fingerings",
@@ -3234,6 +3930,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_argument_parser().parse_args()
+    system_start_measures = (
+        [int(value.strip()) for value in args.system_start_measures.split(",")]
+        if args.system_start_measures
+        else None
+    )
     report = run_alignment(
         image_path=args.image,
         yolo_path=args.yolo,
@@ -3246,6 +3947,8 @@ def main() -> None:
         notes_json_path=args.notes_json,
         include_all_symbols=args.all_symbols,
         repeat_mapping_path=args.repeat_mapping,
+        system_start_measures=system_start_measures,
+        page_end_measure=args.page_end_measure,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

@@ -3,3 +3,5 @@ pdfplumber>=0.11.10,<0.12
 pillow>=12.3,<13.0
 pypdf>=6.15,<7.0
 streamlit>=1.40,<2.0
+streamlit-image-coordinates>=0.4,<0.5
+defusedxml>=0.7.1,<0.8

@@ -11,6 +11,8 @@ import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict, deque
 from pathlib import Path
 
+from defusedxml.ElementTree import DefusedXMLParser
+
 from pipeline_checkpoint import (
     atomic_write_csv,
     atomic_write_json,
@@ -20,7 +22,7 @@ from pipeline_checkpoint import (
 )
 
 
-PIPELINE_VERSION = "0.4.0-xml-class-names"
+PIPELINE_VERSION = "0.3.0"
 BPS_FIELDS = [
     "class_id", "x", "y", "w", "h", "class", "musical_time",
     "start_meas", "end_meas", "start_note", "end_note",
@@ -101,8 +103,13 @@ def _sha256(path: Path) -> str:
 
 
 def _parse_xml(path: Path) -> ET.Element:
-    parser = ET.XMLParser(
-        target=ET.TreeBuilder(insert_comments=True, insert_pis=True)
+    parser = DefusedXMLParser(
+        target=ET.TreeBuilder(insert_comments=True, insert_pis=True),
+        # MusicXML 3.x files commonly contain the official Recordare DOCTYPE.
+        # Accept the declaration but never resolve entities or external files.
+        forbid_dtd=False,
+        forbid_entities=True,
+        forbid_external=True,
     )
     return ET.parse(path, parser=parser).getroot()
 

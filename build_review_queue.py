@@ -17,7 +17,7 @@ from pipeline_checkpoint import (
 )
 
 
-PIPELINE_VERSION = "0.2.0-review-queue"
+PIPELINE_VERSION = "0.3.0-review-queue"
 QUEUE_FIELDS = [
     "queue_id", "priority_rank", "priority_tier", "batch_id", "batch_rank",
     "score_id", "page_id", "yolo_line", "bbox_id", "class_id", "class",

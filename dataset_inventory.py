@@ -11,6 +11,8 @@ import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from defusedxml import ElementTree as SafeET
+
 from PIL import Image
 from pypdf import PdfReader
 
@@ -27,7 +29,12 @@ def _sha256(path: Path) -> str:
 
 
 def _xml_stats(path: Path) -> tuple[int, int]:
-    root = ET.parse(path).getroot()
+    root = SafeET.parse(
+        path,
+        forbid_dtd=False,
+        forbid_entities=True,
+        forbid_external=True,
+    ).getroot()
     measures = sum(
         element.tag.split("}")[-1] == "measure" for element in root.iter()
     )
@@ -40,7 +47,12 @@ def _xml_stats(path: Path) -> tuple[int, int]:
 
 
 def _repeat_stats(path: Path) -> tuple[int, int]:
-    root = ET.parse(path).getroot()
+    root = SafeET.parse(
+        path,
+        forbid_dtd=False,
+        forbid_entities=True,
+        forbid_external=True,
+    ).getroot()
     repeat_marks = sum(
         element.tag.split("}")[-1] == "repeat" for element in root.iter()
     )

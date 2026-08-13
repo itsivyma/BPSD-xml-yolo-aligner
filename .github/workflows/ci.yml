@@ -7,12 +7,36 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install ".[dev]"
       - run: python -m pytest
       - run: bpsd-aligner --version
+      - run: cd /tmp && bpsd-aligner --help
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t bpsd-xml-yolo-aligner:ci .
+      - run: docker run --rm bpsd-xml-yolo-aligner:ci bpsd-aligner --version
+      - run: docker run -d --name bpsd-aligner-ci -p 8501:8501 bpsd-xml-yolo-aligner:ci
+      - run: |
+          for attempt in 1 2 3 4 5; do
+            if curl --fail --silent http://127.0.0.1:8501/_stcore/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs bpsd-aligner-ci
+          exit 1
+      - if: always()
+        run: docker rm --force bpsd-aligner-ci || true

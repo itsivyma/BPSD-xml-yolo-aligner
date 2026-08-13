@@ -4,16 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bpsd-xml-yolo-aligner"
-version = "0.2.0"
+version = "0.3.2"
 description = "Lossless BPSD MusicXML, YOLO, and BPS-OMR alignment with CLI and web UI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "defusedxml>=0.7.1,<0.8",
   "numpy>=2.0,<3.0",
   "pdfplumber>=0.11.10,<0.12",
   "pillow>=12.3,<13.0",
+  "pymupdf>=1.26,<2.0",
   "pypdf>=6.15,<7.0",
   "streamlit>=1.40,<2.0",
+  "streamlit-image-coordinates>=0.4,<0.5",
 ]
 
 [project.optional-dependencies]

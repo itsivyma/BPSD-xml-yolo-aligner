@@ -18,7 +18,7 @@ from pipeline_checkpoint import (
 from xml_export import BPS_FIELDS, EVENT_FIELDS
 
 
-PIPELINE_VERSION = "0.2.0-yolo-xml-combine"
+PIPELINE_VERSION = "0.3.0"
 LINK_FIELDS = [
     "link_id", "bbox_id", "xml_event_id", "xml_node_id", "score_id",
     "page_id", "yolo_line", "yolo_class", "xml_event_type",

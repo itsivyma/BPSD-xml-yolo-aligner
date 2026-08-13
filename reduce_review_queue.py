@@ -18,7 +18,7 @@ from pipeline_checkpoint import (
 )
 
 
-PIPELINE_VERSION = "0.2.0-review-reduction"
+PIPELINE_VERSION = "0.3.0-review-reduction"
 DEFAULT_THRESHOLD = 0.95
 AUTO_ACCEPT_BLOCKED_CLASSES = {f"fingering{digit}" for digit in range(1, 6)}
 PROPOSAL_EXTRA_FIELDS = [

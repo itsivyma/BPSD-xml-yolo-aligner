@@ -10,6 +10,8 @@ from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from defusedxml import ElementTree as SafeET
+
 
 def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
@@ -25,7 +27,12 @@ def _text(element: ET.Element, name: str, default: str = "") -> str:
 
 
 def _first_part_measures(path: Path) -> list[ET.Element]:
-    root = ET.parse(path).getroot()
+    root = SafeET.parse(
+        path,
+        forbid_dtd=False,
+        forbid_entities=True,
+        forbid_external=True,
+    ).getroot()
     part = next(
         element
         for element in root.iter()

@@ -1,6 +1,7 @@
 import csv
-import io
+import json
 
+import pytest
 from PIL import Image, ImageDraw
 
 from bps_xml_alignment import (
@@ -8,6 +9,7 @@ from bps_xml_alignment import (
     StaffGeometry,
     SystemGeometry,
     align_barlines_from_reference,
+    attach_review_note_candidates,
     attach_bps_note_ids,
     attach_repeat_occurrences,
     build_slur_candidates,
@@ -27,6 +29,121 @@ from bps_xml_alignment import (
     unresolved_fingering_rows,
     write_csv,
 )
+from defusedxml.common import EntitiesForbidden
+
+
+def test_attach_review_note_candidates_orders_nearby_notes_and_keeps_metadata():
+    systems = [
+        SystemGeometry(
+            number=1,
+            upper=StaffGeometry(
+                center=100, line_spacing=10, lines=[80, 90, 100, 110, 120]
+            ),
+            lower=StaffGeometry(
+                center=250, line_spacing=10, lines=[230, 240, 250, 260, 270]
+            ),
+            x_left=100,
+            x_right=900,
+        )
+    ]
+    rows = [{"system": "1", "x": "0.30", "y": "0.20"}]
+    notes = [
+        {
+            "note_id": 20,
+            "system": 1,
+            "staff": 1,
+            "x_norm": 0.75,
+            "bps_time": 2.0,
+            "xml_measure": 3,
+            "pitch_name": "G4",
+            "diatonic": 32,
+            "clef": {"sign": "G", "line": 2},
+        },
+        {
+            "note_id": 10,
+            "system": 1,
+            "staff": 1,
+            "x_norm": 0.25,
+            "bps_time": 1.5,
+            "xml_measure": 2,
+            "printed_measure": 1,
+            "pitch_name": "E4",
+            "diatonic": 30,
+            "clef": {"sign": "G", "line": 2},
+        },
+    ]
+
+    attach_review_note_candidates(rows, notes, systems, 1000, 400)
+    candidates = json.loads(rows[0]["review_note_candidates_json"])
+
+    assert [candidate["note_id"] for candidate in candidates] == [10, 20]
+    assert candidates[0]["start_meas"] == "1.500"
+    assert candidates[0]["pitch"] == "E4"
+    assert candidates[0]["staff"] == 1
+    assert candidates[0]["xml_measure"] == 2
+    assert candidates[0]["printed_measure"] == 1
+    assert candidates[0]["measure_note_order"] == 1
+
+
+def test_span_review_candidates_include_all_page_systems_and_xml_only_notes():
+    systems = [
+        SystemGeometry(
+            number=number,
+            upper=StaffGeometry(
+                center=center, line_spacing=10, lines=[center - 20, center - 10, center, center + 10, center + 20]
+            ),
+            lower=StaffGeometry(
+                center=center + 100,
+                line_spacing=10,
+                lines=[center + 80, center + 90, center + 100, center + 110, center + 120],
+            ),
+            x_left=100,
+            x_right=900,
+        )
+        for number, center in ((1, 100), (2, 300))
+    ]
+    rows = [
+        {
+            "system": "1",
+            "target_type": "span",
+            "x": "0.5",
+            "y": "0.25",
+        }
+    ]
+    notes = [
+        {
+            "note_id": 10,
+            "xml_note_sequence": 1,
+            "system": 1,
+            "staff": 1,
+            "x_norm": 0.5,
+            "bps_time": 1.0,
+            "xml_measure": 2,
+            "pitch_name": "E4",
+            "diatonic": 30,
+            "clef": {"sign": "G", "line": 2},
+        },
+        {
+            "note_id": None,
+            "xml_note_sequence": 2,
+            "system": 2,
+            "staff": 1,
+            "x_norm": 0.25,
+            "bps_time": None,
+            "xml_measure": 8,
+            "pitch_name": "G4",
+            "diatonic": 32,
+            "clef": {"sign": "G", "line": 2},
+        },
+    ]
+
+    attach_review_note_candidates(rows, notes, systems, 1000, 600, limit=1)
+    candidates = json.loads(rows[0]["review_note_candidates_json"])
+
+    assert len(candidates) == 2
+    assert {candidate["xml_measure"] for candidate in candidates} == {2, 8}
+    xml_only = next(candidate for candidate in candidates if candidate["note_id"] is None)
+    assert xml_only["connected_note"] == "[]"
 
 
 def test_note_pixel_position_uses_measure_local_piecewise_mapping():
@@ -84,6 +201,125 @@ def test_parse_musicxml_keeps_tied_start_and_stop(tmp_path):
 
     assert page["notes"][0]["tie_marks"] == [{"type": "start"}]
     assert page["notes"][1]["tie_marks"] == [{"type": "stop"}]
+
+
+def test_parse_musicxml_accepts_official_doctype_without_resolving_it(tmp_path):
+    xml_path = tmp_path / "doctype.xml"
+    xml_path.write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.0 Partwise//EN"
+  "http://www.musicxml.org/dtds/partwise.dtd">
+<score-partwise version="3.0">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1"><measure number="1" width="100">
+    <attributes><divisions>1</divisions></attributes>
+    <note default-x="10"><pitch><step>C</step><octave>4</octave></pitch>
+      <duration>1</duration><voice>1</voice><staff>1</staff></note>
+  </measure></part>
+</score-partwise>
+""",
+        encoding="utf-8",
+    )
+
+    assert len(parse_musicxml_page(xml_path, 1)["notes"]) == 1
+
+
+def test_parse_musicxml_uses_scanned_system_measure_anchors(tmp_path):
+    xml_path = tmp_path / "layout-mismatch.xml"
+    measures = []
+    for number in range(1, 7):
+        print_tag = (
+            '<print new-page="yes"/>'
+            if number in {1, 3}
+            else '<print new-system="yes"/>'
+            if number in {2, 5}
+            else ""
+        )
+        measures.append(
+            f'''<measure number="{number}" width="100">{print_tag}
+            <attributes><divisions>1</divisions></attributes>
+            <note default-x="50"><pitch><step>C</step><octave>4</octave></pitch>
+              <duration>1</duration><voice>1</voice><staff>1</staff></note>
+            </measure>'''
+        )
+    xml_path.write_text(
+        '''<?xml version="1.0"?><score-partwise><part-list>
+        <score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+        <part id="P1">'''
+        + "".join(measures)
+        + "</part></score-partwise>",
+        encoding="utf-8",
+    )
+
+    xml_layout = parse_musicxml_page(xml_path, page_number=2)
+    scan_layout = parse_musicxml_page(
+        xml_path,
+        page_number=2,
+        system_start_measures=[2, 4],
+        page_end_measure=5,
+    )
+
+    assert [measure["measure"] for measure in xml_layout["measures"]] == [3, 4, 5, 6]
+    assert [measure["measure"] for measure in scan_layout["measures"]] == [3, 4, 5, 6]
+    assert [measure["printed_measure"] for measure in scan_layout["measures"]] == [
+        2,
+        3,
+        4,
+        5,
+    ]
+    assert [measure["system"] for measure in scan_layout["measures"]] == [1, 1, 2, 2]
+    assert scan_layout["layout_source"] == "scan_printed_measure_anchors"
+    assert scan_layout["notes"][0]["xml_measure"] == 3
+    assert scan_layout["notes"][0]["printed_measure"] == 2
+    assert scan_layout["notes"][0]["page"] == 2
+
+
+def test_scanned_measure_anchor_keeps_pickup_xml_measure_unlabelled(tmp_path):
+    xml_path = tmp_path / "pickup.xml"
+    xml_path.write_text(
+        '''<?xml version="1.0"?><score-partwise><part-list>
+        <score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+        <part id="P1">
+          <measure number="1" width="100"><print new-page="yes"/>
+            <attributes><divisions>4</divisions>
+              <time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+            <note default-x="50"><pitch><step>C</step><octave>4</octave></pitch>
+              <duration>4</duration><voice>1</voice><staff>1</staff></note>
+          </measure>
+          <measure number="2" width="100">
+            <note default-x="50"><pitch><step>D</step><octave>4</octave></pitch>
+              <duration>16</duration><voice>1</voice><staff>1</staff></note>
+          </measure>
+        </part></score-partwise>''',
+        encoding="utf-8",
+    )
+
+    page = parse_musicxml_page(
+        xml_path,
+        page_number=1,
+        system_start_measures=[1],
+        page_end_measure=1,
+    )
+
+    assert [measure["measure"] for measure in page["measures"]] == [1, 2]
+    assert [measure["printed_measure"] for measure in page["measures"]] == [0, 1]
+    assert page["notes"][1]["xml_measure"] == 2
+    assert page["notes"][1]["printed_measure"] == 1
+    assert page["notes"][1]["bps_time"] == 1.0
+
+
+def test_parse_musicxml_still_rejects_entity_expansion(tmp_path):
+    xml_path = tmp_path / "entity.xml"
+    xml_path.write_text(
+        """<?xml version="1.0"?>
+<!DOCTYPE score-partwise [<!ENTITY unsafe "expanded">]>
+<score-partwise><part-list><score-part id="P1"><part-name>&unsafe;</part-name>
+</score-part></part-list></score-partwise>""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EntitiesForbidden):
+        parse_musicxml_page(xml_path, 1)
 
 
 def test_build_tie_candidates_pairs_same_staff_voice_and_pitch():
@@ -450,7 +686,17 @@ def test_build_slur_candidates_allows_cross_staff_slur():
 
 
 def _timed_note(
-    sequence, time, pitch, midi, x_norm, *, marks=None, ties=None, fermata=False
+    sequence,
+    time,
+    pitch,
+    midi,
+    x_norm,
+    *,
+    marks=None,
+    ties=None,
+    fermata=False,
+    xml_measure=2,
+    system=1,
 ):
     return {
         "xml_note_sequence": sequence,
@@ -461,9 +707,9 @@ def _timed_note(
         "diatonic": 28 + sequence,
         "staff": 1,
         "voice": "1",
-        "system": 1,
-        "xml_measure": 2,
-        "xml_measure_index": 2,
+        "system": system,
+        "xml_measure": xml_measure,
+        "xml_measure_index": xml_measure,
         "system_measure_index": 0,
         "measure_x_norm": x_norm,
         "x_norm": x_norm,
@@ -518,6 +764,88 @@ def test_direct_notations_and_spans_receive_start_and_end_times():
     assert by_class["slur"]["end_meas"] == "1.500"
     assert by_class["tie"]["start_meas"] == "2.000"
     assert by_class["tie"]["end_meas"] == "2.500"
+
+
+def test_cross_system_slur_segments_share_complete_xml_endpoints():
+    systems = [
+        SystemGeometry(
+            number=1,
+            upper=StaffGeometry(center=100, line_spacing=10, lines=[80, 90, 100, 110, 120]),
+            lower=StaffGeometry(center=250, line_spacing=10, lines=[230, 240, 250, 260, 270]),
+            x_left=100,
+            x_right=900,
+        ),
+        SystemGeometry(
+            number=2,
+            upper=StaffGeometry(center=450, line_spacing=10, lines=[430, 440, 450, 460, 470]),
+            lower=StaffGeometry(center=600, line_spacing=10, lines=[580, 590, 600, 610, 620]),
+            x_left=100,
+            x_right=900,
+        ),
+    ]
+    notes = [
+        _timed_note(
+            0,
+            10.0,
+            "C4",
+            60,
+            0.70,
+            marks=[{"type": "start", "number": "1", "orientation": "over"}],
+            xml_measure=10,
+            system=1,
+        ),
+        _timed_note(
+            1,
+            11.0,
+            "D4",
+            62,
+            0.30,
+            marks=[{"type": "stop", "number": "1", "orientation": "over"}],
+            xml_measure=11,
+            system=2,
+        ),
+    ]
+    bps_notes = [
+        {
+            "note_id": index,
+            "bps_time": note["bps_time"],
+            "end_time": note["bps_time"] + 0.25,
+            "midi": note["midi"],
+        }
+        for index, note in enumerate(notes)
+    ]
+    boxes = [
+        {
+            "txt_line": 1,
+            "class_id": 56,
+            "class": "slur",
+            "x": 0.78,
+            "y": 0.12,
+            "w": 0.24,
+            "h": 0.04,
+        },
+        {
+            "txt_line": 2,
+            "class_id": 56,
+            "class": "slur",
+            "x": 0.22,
+            "y": 0.56,
+            "w": 0.24,
+            "h": 0.04,
+        },
+    ]
+
+    rows = match_xml_spans(boxes, notes, bps_notes, systems, 1000, 800)
+
+    assert len(rows) == 2
+    by_line = {row["txt_line"]: row for row in rows}
+    assert by_line[1]["start_meas"] == "10.000"
+    assert by_line[1]["end_meas"] == "11.000"
+    assert by_line[2]["start_meas"] == "10.000"
+    assert by_line[2]["end_meas"] == "11.000"
+    assert by_line[1]["match_source"] == "musicxml_slur_start_endpoint_candidate"
+    assert by_line[2]["match_source"] == "musicxml_slur_end_endpoint_candidate"
+    assert {row["status"] for row in rows} == {"review"}
 
 
 def test_unknown_class_receives_reviewable_geometry_time_estimate():
@@ -596,6 +924,25 @@ def test_detect_systems_rejects_dense_short_patterns_and_footer_text():
             [214, 464],
         )
     )
+
+
+def test_detect_systems_keeps_staff_extent_when_left_side_is_partly_obscured():
+    image = Image.new("L", (1000, 400), "white")
+    draw = ImageDraw.Draw(image)
+    upper_lines = [80, 90, 100, 110, 120]
+    lower_lines = [230, 240, 250, 260, 270]
+    # Only three rows remain clean across the full system; the other seven are
+    # visible only on the right, as happens under dense notation and damage.
+    for y in upper_lines[:3]:
+        draw.line((80, y, 920, y), fill="black", width=2)
+    for y in [*upper_lines[3:], *lower_lines]:
+        draw.line((500, y, 920, y), fill="black", width=2)
+
+    systems = detect_systems(image.convert("RGB"))
+
+    assert len(systems) == 1
+    assert systems[0].x_left < 120
+    assert systems[0].x_right > 880
 
 
 def test_detect_barlines_uses_continuous_vertical_ink():
@@ -900,6 +1247,38 @@ def test_single_fingering_on_multinote_chord_is_not_autoaccepted():
     assert rows[0]["status"] == "review"
     assert float(rows[0]["confidence"]) < 0.70
     assert rows[0]["match_source"].endswith("ambiguous_chord")
+
+
+def test_long_crescendo_preserves_written_measure_start_and_end():
+    systems = [
+        SystemGeometry(
+            number=1,
+            upper=StaffGeometry(center=100, line_spacing=10, lines=[80, 90, 100, 110, 120]),
+            lower=StaffGeometry(center=250, line_spacing=10, lines=[230, 240, 250, 260, 270]),
+            x_left=100,
+            x_right=900,
+        )
+    ]
+    notes = [
+        _timed_note(0, 42.0, "C4", 60, 0.15, xml_measure=43),
+        _timed_note(1, 43.0, "D4", 62, 0.85, xml_measure=44),
+    ]
+    box = {
+        "txt_line": 1,
+        "class_id": 25,
+        "class": "dynamicCrescendoLong",
+        "x": 0.5,
+        "y": 0.15,
+        "w": 0.7,
+        "h": 0.03,
+    }
+
+    rows = estimate_all_symbol_times([box], notes, [], systems, 1000, 500)
+
+    assert rows[0]["start_xml_measure"] == 43
+    assert rows[0]["end_xml_measure"] == 44
+    assert rows[0]["start_meas"] == "42.000"
+    assert rows[0]["end_meas"] == "43.000"
 
 
 def test_unresolved_fingering_semantics_are_blank():

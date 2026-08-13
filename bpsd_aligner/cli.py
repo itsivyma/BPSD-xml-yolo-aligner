@@ -22,6 +22,14 @@ COMMANDS = {
     "review-sheets": ("alignment_review_sheets", "Render review sheets"),
     "render-overlays": ("render_yolo_overlays", "Render YOLO page overlays"),
     "apply-review": ("apply_human_audit_feedback", "Apply reviewed decisions"),
+    "review-eval": (
+        "bpsd_aligner.review_corrections",
+        "Normalize human evaluation ground truth",
+    ),
+    "worker": (
+        "bpsd_aligner.web_worker",
+        "Run one persisted background job request",
+    ),
 }
 
 

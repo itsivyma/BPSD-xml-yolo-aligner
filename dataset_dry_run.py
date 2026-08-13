@@ -28,7 +28,7 @@ from pipeline_checkpoint import (
 )
 
 
-PIPELINE_VERSION = "0.7.0-all-symbol-time-candidates"
+PIPELINE_VERSION = "0.3.0"
 OFFICIAL_FIELDS = [
     "class_id", "x", "y", "w", "h", "class", "musical_time",
     "start_meas", "end_meas", "start_note", "end_note",
