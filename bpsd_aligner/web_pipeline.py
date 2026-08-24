@@ -15,6 +15,7 @@ from PIL import Image
 
 from bpsd_aligner import __version__ as PIPELINE_VERSION
 from bpsd_aligner.bps_omr_schema import musical_time_for_class
+from bpsd_aligner.span_semantics import endpoint_note_ids, index_chord_members
 from bps_xml_alignment import (
     load_bps_notes,
     load_categories,
@@ -470,6 +471,14 @@ def build_xml_spans(events: list[dict], destination: Path) -> list[dict]:
         for row in events
         if row.get("event_type") == "note"
     }
+    chord_members = index_chord_members(
+        note_by_id.values(),
+        lambda row: (
+            (str(row.get("score_id", "")), str(row.get("chord_id", "")))
+            if str(row.get("chord_id", "")).strip()
+            else None
+        ),
+    )
     open_spans: dict[tuple[str, str, str, str], list[dict]] = {}
     seen_tie_markers: set[tuple[str, str, str]] = set()
     rows = []
@@ -477,6 +486,12 @@ def build_xml_spans(events: list[dict], destination: Path) -> list[dict]:
     def anchor(event: dict) -> dict:
         ids = _json_value(event.get("anchor_xml_event_ids_json"), [])
         return note_by_id.get(ids[0], {}) if isinstance(ids, list) and ids else {}
+
+    def anchor_chord(note: dict) -> list[dict]:
+        chord_id = str(note.get("chord_id", "")).strip()
+        if not chord_id:
+            return [note]
+        return chord_members.get((str(note.get("score_id", "")), chord_id), [note])
 
     for event in events:
         marker = _span_marker(event)
@@ -541,10 +556,13 @@ def build_xml_spans(events: list[dict], destination: Path) -> list[dict]:
         end_anchor = anchor(event)
         start_note = start_anchor.get("start_note", "")
         end_note = end_anchor.get("end_note", "")
-        connected = []
-        for value in (start_note, end_note):
-            if str(value) != "" and value not in connected:
-                connected.append(value)
+        connected = endpoint_note_ids(
+            start_anchor,
+            end_anchor,
+            start_members=anchor_chord(start_anchor),
+            end_members=anchor_chord(end_anchor),
+            expand_chords=kind == "slur",
+        )
         rows.append(
             {
                 "span_id": f"{start.get('score_id', '')}:SPAN{len(rows) + 1:07d}",

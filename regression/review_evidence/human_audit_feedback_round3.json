@@ -1,0 +1,13 @@
+{
+  "schema_version": "1.0",
+  "status": "spot_check_batch_passed",
+  "recorded_date": "2026-08-09",
+  "reviewer": "User",
+  "source": "user_visual_spot_check_round3",
+  "audit_scope": "all_rows_in_round3_audit_batch",
+  "verification_level": "sampled_not_individually_verified",
+  "per_row_human_approved": false,
+  "preserve_automatic_alignment": true,
+  "raw_user_feedback": "抽樣檢查後，指法應該都沒問題",
+  "note": "The reviewer sampled the round-3 full-page images and accepted the batch. This is not equivalent to individually approving every audit row."
+}

@@ -467,6 +467,62 @@ def test_cross_page_xml_spans_and_repeat_expansion_are_explicit(tmp_path: Path):
     assert [row["start_meas"] for row in expanded] == [1, 4.0, 8.0, 9]
 
 
+def test_cross_page_slur_keeps_complete_endpoint_chords(tmp_path: Path):
+    events = []
+    for event_id, pitch, note_id, page, measure, chord_id in (
+        ("N1", "60", "10", "1", "4", "S:C1"),
+        ("N2", "64", "11", "1", "4", "S:C1"),
+        ("N3", "62", "20", "2", "5", "S:C2"),
+        ("N4", "65", "21", "2", "5", "S:C2"),
+    ):
+        events.append(
+            {
+                "score_id": "S",
+                "xml_event_id": event_id,
+                "event_type": "note",
+                "midi_pitch": pitch,
+                "start_note": note_id,
+                "end_note": note_id,
+                "start_meas": measure,
+                "end_meas": measure,
+                "page": page,
+                "xml_measure": measure,
+                "staff": "1",
+                "voice": "1",
+                "chord_id": chord_id,
+            }
+        )
+    for event_id, anchor_id, marker, page, measure in (
+        ("SLUR1", "N1", "start", "1", "4"),
+        ("SLUR2", "N4", "stop", "2", "5"),
+    ):
+        events.append(
+            {
+                "score_id": "S",
+                "xml_event_id": event_id,
+                "event_type": "notation",
+                "event_subtype": "slur",
+                "class": "slur",
+                "voice": "1",
+                "staff": "1",
+                "page": page,
+                "xml_measure": measure,
+                "xml_attributes_json": json.dumps(
+                    {"number": "1", "type": marker}
+                ),
+                "anchor_xml_event_ids_json": json.dumps([anchor_id]),
+            }
+        )
+
+    spans = build_xml_spans(events, tmp_path / "chord-slur-spans.csv")
+
+    assert len(spans) == 1
+    assert spans[0]["cross_page"] is True
+    assert spans[0]["start_note"] == "10"
+    assert spans[0]["end_note"] == "21"
+    assert spans[0]["connected_note"] == '["10", "11", "20", "21"]'
+
+
 def test_tie_spans_pair_by_pitch_and_deduplicate_tie_and_tied_markers(tmp_path: Path):
     events = []
     for event_id, pitch, note_id, time in (
@@ -485,6 +541,7 @@ def test_tie_spans_pair_by_pitch_and_deduplicate_tie_and_tied_markers(tmp_path: 
                 "end_note": note_id,
                 "start_meas": time,
                 "end_meas": time,
+                "chord_id": "S:C1" if time == "1" else "S:C2",
             }
         )
     for subtype in ("tie", "tied"):

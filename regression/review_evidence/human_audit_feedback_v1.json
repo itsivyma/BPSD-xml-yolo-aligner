@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "status": "resolved_human_review",
+  "recorded_date": "2026-08-09",
+  "source": "user_visual_review",
+  "entries": [
+    {
+      "sample_id": "S012",
+      "bbox_id": "Beethoven_Op101-01-02:Y95",
+      "audit_decision": "incorrect_original_match",
+      "user_correction": {"measure": 42, "staff": null, "pitch": "A5"},
+      "resolution_status": "resolved_user_selected_occurrence",
+      "selected_occurrence_left_to_right": 1,
+      "corrected_start_meas": 42.0,
+      "corrected_note_ids": [491],
+      "corrected_xml_event_ids": ["Beethoven_Op101-01:E0001229"],
+      "evidence": "The user selected the first of four A5 notes from left to right; it is BPS note 491 and XML measure 42, staff 1, beat 1.0."
+    },
+    {
+      "sample_id": "S019",
+      "bbox_id": "Beethoven_Op101-01-03:Y201",
+      "audit_decision": "incorrect_original_match",
+      "user_correction": {"measure": 90, "staff": null, "pitch": "D5"},
+      "resolution_status": "resolved_unique_bps_note",
+      "corrected_start_meas": 90.66666666666667,
+      "corrected_note_ids": [1153],
+      "corrected_xml_event_ids": ["Beethoven_Op101-01:E0002904"],
+      "evidence": "BPS note 1153 is the unique D5 whose start_meas is within measure 90; XML event is measure 90, staff 1, beat 3.0."
+    },
+    {
+      "sample_id": "S023",
+      "bbox_id": "Beethoven_Op106-01-08:Y55",
+      "audit_decision": "incorrect_original_match",
+      "user_correction": {"measure": 237, "staff": 2, "pitch": "E4"},
+      "measure_numbering_domain": "printed_score",
+      "resolution_status": "resolved_human_pitch_canonicalized_by_key_signature",
+      "canonical_pitch": "Eb4",
+      "corrected_start_meas": 362.0,
+      "corrected_note_ids": [5308],
+      "corrected_xml_event_ids": ["Beethoven_Op106-01:E0005003"],
+      "evidence": "The user corrected the pitch to E4 on printed-score measure 237, lower staff. Under the score key signature, BPS/XML canonicalizes this written E as E-flat-4. It maps uniquely to BPS note 5308 and XML measure 244, staff 2, beat 1.0."
+    },
+    {
+      "sample_id": "S032",
+      "bbox_id": "Beethoven_Op109-01-03:Y47",
+      "audit_decision": "incorrect_original_match",
+      "user_correction": {"measure": 63, "staff": 2, "pitch": "F#4"},
+      "resolution_status": "resolved_user_selected_occurrence",
+      "selected_occurrence_left_to_right": 2,
+      "corrected_start_meas": 63.944010416666664,
+      "corrected_note_ids": [1185],
+      "corrected_xml_event_ids": ["Beethoven_Op109-01:E0002010"],
+      "evidence": "The user clarified F-sharp-4 and selected the second occurrence from left to right; it is BPS note 1185 and XML measure 64, staff 2, beat 3.83203125."
+    },
+    {
+      "sample_id": "S037",
+      "bbox_id": "Beethoven_Op109-01-03:Y244",
+      "audit_decision": "incorrect_original_match",
+      "user_correction": {"measure": 52, "staff": null, "pitch": "E3"},
+      "resolution_status": "resolved_unique_bps_note",
+      "corrected_start_meas": 52.5,
+      "corrected_note_ids": [860],
+      "corrected_xml_event_ids": ["Beethoven_Op109-01:E0001431"],
+      "evidence": "BPS note 860 is the unique E3 whose start_meas is within measure 52; XML event is staff 2, XML measure 53, beat 2.0."
+    },
+    {
+      "sample_id": "S032",
+      "bbox_id": "Beethoven_Op109-01-03:Y47",
+      "audit_decision": "withdrawn_typo",
+      "user_correction": {"measure": 52, "staff": null, "pitch": "E3"},
+      "resolution_status": "withdrawn_by_user",
+      "apply_to_audit": false,
+      "evidence": "The user confirmed that this entry was a typo. It is retained only as an audit trail and must not be applied to S032 or any CSV."
+    }
+  ]
+}

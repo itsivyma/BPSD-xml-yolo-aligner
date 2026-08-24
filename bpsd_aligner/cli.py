@@ -30,6 +30,10 @@ COMMANDS = {
         "bpsd_aligner.review_corrections",
         "Normalize human evaluation ground truth",
     ),
+    "validate-evidence": (
+        "bpsd_aligner.review_evidence",
+        "Validate archived human review evidence",
+    ),
     "review-dataset": (
         "bpsd_aligner.review_dataset",
         "Build calibration/training rows from website reviews",
