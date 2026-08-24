@@ -183,7 +183,8 @@ def _save_upload(
 ) -> Path:
     """Persist an upload under an optional role-specific collision-safe name."""
 
-    directory.mkdir(parents=True, exist_ok=True)
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(directory, 0o700)
     path = Path(
         upload_destination(
             directory,
@@ -193,6 +194,7 @@ def _save_upload(
         )
     )
     path.write_bytes(uploaded.getvalue())
+    os.chmod(path, 0o600)
     return path
 
 
@@ -2458,6 +2460,7 @@ with align_tab:
                                     expected_fingerprint=fingerprint,
                                     expected_pipeline_version=PIPELINE_VERSION,
                                     expected_code_signature=pipeline_code_signature(),
+                                    expected_owner_id=options["owner_id"],
                                 )
                             except Exception:
                                 release_job_lease(lease_path)

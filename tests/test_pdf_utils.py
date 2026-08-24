@@ -38,3 +38,21 @@ def test_render_pdf_page_rejects_page_outside_pdf(tmp_path):
 
     with pytest.raises(ValueError, match="has 2 pages"):
         render_pdf_page(pdf_path, 3, tmp_path / "page.png")
+
+
+def test_pdf_page_count_enforces_configured_limit(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "clean.pdf"
+    _write_pdf(pdf_path)
+    monkeypatch.setenv("BPSD_ALIGNER_MAX_PDF_PAGES", "1")
+
+    with pytest.raises(ValueError, match="configured limit is 1"):
+        pdf_page_count(pdf_path)
+
+
+def test_render_pdf_page_rejects_excessive_pixel_count(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "clean.pdf"
+    _write_pdf(pdf_path)
+    monkeypatch.setenv("BPSD_ALIGNER_MAX_PDF_RENDER_PIXELS", "100")
+
+    with pytest.raises(ValueError, match="would render"):
+        render_pdf_page(pdf_path, 1, tmp_path / "page.png", dpi=144)

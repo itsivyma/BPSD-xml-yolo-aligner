@@ -119,6 +119,7 @@ def run_background_job(request_path: Path) -> Path:
                 expected_fingerprint=fingerprint,
                 expected_pipeline_version=PIPELINE_VERSION,
                 expected_code_signature=pipeline_code_signature(),
+                expected_owner_id=str(request.get("owner_id", "")),
             )
         if clean_pdf_path is not None:
             page_count = pdf_page_count(clean_pdf_path)
@@ -369,9 +370,11 @@ def run_background_job(request_path: Path) -> Path:
             message="Background worker stopped before outputs were ready.",
             error=f"{type(error).__name__}: {error}",
         )
-        (job_dir / "worker_traceback.log").write_text(
+        traceback_path = job_dir / "worker_traceback.log"
+        traceback_path.write_text(
             traceback.format_exc(), encoding="utf-8"
         )
+        os.chmod(traceback_path, 0o600)
         raise
     finally:
         release_job_lease(lease)
