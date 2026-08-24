@@ -45,7 +45,8 @@ candidates that the system refuses to invent values for.
   slur endpoint chords.
 - `regression/review_evidence/` preserves the original pre-website human
   fingering decisions. Read its README before normalization; batch-level spot
-  checks are not per-row approvals.
+  checks are not per-row approvals. Run `bpsd-aligner validate-evidence
+  regression/review_evidence` before using the archive.
 
 Never update the baseline until a human has verified the changed assignments.
 

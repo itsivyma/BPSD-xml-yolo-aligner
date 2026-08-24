@@ -52,6 +52,7 @@ from bpsd_aligner.overlay import (
     render_alignment_overlay,
     write_alignment_overlay,
 )
+from bpsd_aligner.span_semantics import endpoint_note_ids, index_chord_members
 from bpsd_aligner.thresholds import auto_accept_threshold
 
 
@@ -3967,18 +3968,17 @@ def match_xml_spans(
     """Match YOLO slur/tie boxes to paired MusicXML endpoints."""
 
     systems_by_number = {system.number: system for system in systems}
-    chord_members: dict[tuple[int, int, int], list[dict]] = defaultdict(list)
-    for note in xml_notes:
+    def chord_key(note: dict) -> tuple[int, int, int] | None:
         chord_sequence = note.get("xml_chord_sequence")
         if chord_sequence is None:
-            continue
-        chord_members[
-            (
-                int(note.get("system", 0)),
-                int(note.get("staff", 1)),
-                int(chord_sequence),
-            )
-        ].append(note)
+            return None
+        return (
+            int(note.get("system", 0)),
+            int(note.get("staff", 1)),
+            int(chord_sequence),
+        )
+
+    chord_members = index_chord_members(xml_notes, chord_key)
 
     def slur_chord_members(note: dict) -> list[dict]:
         """Return every note in the endpoint chord selected by a slur."""
@@ -3986,11 +3986,7 @@ def match_xml_spans(
         chord_sequence = note.get("xml_chord_sequence")
         if chord_sequence is None:
             return [note]
-        key = (
-            int(note.get("system", 0)),
-            int(note.get("staff", 1)),
-            int(chord_sequence),
-        )
+        key = chord_key(note)
         return sorted(
             chord_members.get(key, [note]),
             key=lambda member: (
@@ -4218,8 +4214,17 @@ def match_xml_spans(
             # MusicXML noteheads carrying the slur marks.  A tie is pitch-
             # specific and therefore deliberately remains a two-note span.
             if class_name == "slur":
+                connected = endpoint_note_ids(
+                    target["start"]["event"],
+                    target["end"]["event"],
+                    start_members=target["start"].get("members"),
+                    end_members=target["end"].get("members"),
+                    expand_chords=True,
+                )
                 row["start_note"] = target["start"]["event"].get("note_id", "")
                 row["end_note"] = target["end"]["event"].get("note_id", "")
+                row["connected_note"] = json.dumps(connected)
+                row["note_ids"] = json.dumps(connected)
             output.append(row)
     return output
 

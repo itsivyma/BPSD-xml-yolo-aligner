@@ -29,3 +29,14 @@ reconstructed from source MusicXML, YOLO labels, or generated outputs.
 The one-off round-2/round-3 migration scripts and generated audit outputs are
 deliberately not archived here. The current `bpsd-aligner apply-review` and
 regression tools remain the supported workflow.
+
+Validate the archive without applying any decision:
+
+```bash
+bpsd-aligner validate-evidence regression/review_evidence
+```
+
+The validator also excludes the earlier decision sharing an identity with a
+later withdrawal. The current archive contains 26 historical row entries, of
+which 24 remain active; its one sampled batch acceptance promotes zero rows to
+individual human approval.

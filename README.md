@@ -419,7 +419,9 @@ portable schema. Private score annotations remain outside Git.
 Pre-website fingering decisions are preserved under
 `regression/review_evidence/` as immutable historical evidence. They are not
 loaded automatically; normalize and revalidate an entry before using it as
-current ground truth.
+current ground truth. Run `bpsd-aligner validate-evidence
+regression/review_evidence` to verify withdrawals and batch-level acceptance
+semantics without applying any decision.
 
 Only after reviewing an intentional result change, update that baseline:
 
