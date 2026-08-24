@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import io
 import os
+import hashlib
+import hmac
+import secrets
 import shutil
 import zipfile
 import time
@@ -21,6 +24,11 @@ DEFAULT_MAX_FILE_BYTES = 200 * 1024 * 1024
 DEFAULT_MAX_BATCH_BYTES = 1024 * 1024 * 1024
 DEFAULT_MAX_CONCURRENT_JOBS = 2
 DEFAULT_MAX_PAGES = 200
+DEFAULT_MAX_CHECKPOINT_MEMBERS = 10_000
+DEFAULT_MAX_CHECKPOINT_MEMBER_BYTES = 256 * 1024 * 1024
+DEFAULT_MAX_CHECKPOINT_BYTES = 1024 * 1024 * 1024
+DEFAULT_MAX_COMPRESSION_RATIO = 200
+CHECKPOINT_ARCHIVE_SCHEMA = "2.0"
 
 
 @dataclass(frozen=True)
@@ -47,9 +55,72 @@ def job_directory(fingerprint: str, *, root: Path | None = None) -> Path:
         character not in "0123456789abcdef" for character in fingerprint.lower()
     ):
         raise ValueError("job fingerprint must be a SHA-256 hexadecimal digest")
-    target = (root or job_store_root()) / fingerprint.lower()
-    target.mkdir(parents=True, exist_ok=True)
+    store = root or job_store_root()
+    store.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(store, 0o700)
+    target = store / fingerprint.lower()
+    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(target, 0o700)
     return target
+
+
+def _private_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path, 0o700)
+
+
+def _checkpoint_secret(job_dir: Path) -> bytes:
+    """Return the deployment checkpoint signing secret.
+
+    Set ``BPSD_ALIGNER_CHECKPOINT_SECRET`` to the same high-entropy value on
+    every instance that must exchange checkpoint ZIPs. Local installations get
+    a private persistent key in the job-store root.
+    """
+
+    configured = os.environ.get("BPSD_ALIGNER_CHECKPOINT_SECRET", "").strip()
+    if configured:
+        if len(configured.encode("utf-8")) < 32:
+            raise ValueError(
+                "BPSD_ALIGNER_CHECKPOINT_SECRET must contain at least 32 bytes"
+            )
+        return configured.encode("utf-8")
+    key_path = job_dir.parent / ".checkpoint-secret"
+    _private_directory(job_dir.parent)
+    if not key_path.exists():
+        try:
+            descriptor = os.open(
+                key_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(descriptor, "wb") as file:
+                file.write(secrets.token_bytes(32))
+    os.chmod(key_path, 0o600)
+    secret = key_path.read_bytes()
+    if len(secret) < 32:
+        raise ValueError("checkpoint signing key is invalid")
+    return secret
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _checkpoint_signature(payload: dict, secret: bytes) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hmac.new(secret, encoded, hashlib.sha256).hexdigest()
 
 
 def validate_upload_batch(
@@ -467,30 +538,62 @@ def load_page_checkpoint(
 
 
 def build_job_checkpoint_archive(job_dir: Path, destination: Path) -> Path:
-    """Package resumable derived artifacts without original uploaded inputs."""
+    """Package signed resumable artifacts without original uploaded inputs."""
 
     allowed_roots = [job_dir / "checkpoints", job_dir / "outputs"]
     manifest = job_dir / "job_manifest.json"
     if not manifest.is_file():
         raise ValueError("job manifest is missing")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.write(manifest, arcname="job_manifest.json")
-        status = job_dir / "job_status.json"
-        if status.is_file():
-            archive.write(status, arcname="job_status.json")
-        review_state = job_dir / "review_state.json"
-        if review_state.is_file():
-            archive.write(review_state, arcname="review_state.json")
-        for root in allowed_roots:
-            if not root.is_dir():
+    try:
+        job_identity = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError) as error:
+        raise ValueError("job manifest is invalid") from error
+    members = [manifest]
+    for optional_name in ("job_status.json", "review_state.json"):
+        optional = job_dir / optional_name
+        if optional.is_file():
+            members.append(optional)
+    for root in allowed_roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            # The final download archive is reproducible from the individual
+            # outputs and otherwise duplicates nearly the entire checkpoint.
+            if path.name in {"all_outputs.zip", "alignment_job_checkpoint.zip"}:
                 continue
-            for path in sorted(item for item in root.rglob("*") if item.is_file()):
-                # The final download archive is reproducible from the individual
-                # outputs and otherwise duplicates nearly the entire checkpoint.
-                if path.name in {"all_outputs.zip", "alignment_job_checkpoint.zip"}:
-                    continue
-                archive.write(path, arcname=str(path.relative_to(job_dir)))
+            members.append(path)
+    member_metadata = [
+        {
+            "path": path.relative_to(job_dir).as_posix(),
+            "size": path.stat().st_size,
+            "sha256": _file_sha256(path),
+        }
+        for path in members
+    ]
+    checkpoint_manifest = {
+        "schema_version": CHECKPOINT_ARCHIVE_SCHEMA,
+        "job_id": job_identity.get("job_id", ""),
+        "owner_id": job_identity.get("owner_id", ""),
+        "pipeline_version": job_identity.get("pipeline_version", ""),
+        "code_signature": job_identity.get("code_signature", ""),
+        "members": member_metadata,
+    }
+    envelope = {
+        **checkpoint_manifest,
+        "hmac_sha256": _checkpoint_signature(
+            checkpoint_manifest,
+            _checkpoint_secret(job_dir),
+        ),
+    }
+    _private_directory(destination.parent)
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "checkpoint_manifest.json",
+            json.dumps(envelope, ensure_ascii=False, sort_keys=True),
+        )
+        for path in members:
+            archive.write(path, arcname=path.relative_to(job_dir).as_posix())
+    os.chmod(destination, 0o600)
     return destination
 
 
@@ -501,35 +604,90 @@ def restore_job_checkpoint_archive(
     expected_fingerprint: str,
     expected_pipeline_version: str | None = None,
     expected_code_signature: str | None = None,
-    max_uncompressed_bytes: int = 2 * 1024 * 1024 * 1024,
+    expected_owner_id: str | None = None,
+    max_uncompressed_bytes: int = DEFAULT_MAX_CHECKPOINT_BYTES,
+    max_member_bytes: int = DEFAULT_MAX_CHECKPOINT_MEMBER_BYTES,
+    max_members: int = DEFAULT_MAX_CHECKPOINT_MEMBERS,
+    max_compression_ratio: float = DEFAULT_MAX_COMPRESSION_RATIO,
 ) -> int:
     """Safely restore a portable checkpoint archive into its fingerprinted job."""
 
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         try:
-            manifest = json.loads(archive.read("job_manifest.json"))
+            envelope = json.loads(archive.read("checkpoint_manifest.json"))
         except (KeyError, json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise ValueError("checkpoint ZIP has no valid job_manifest.json") from error
-        if manifest.get("job_id") != expected_fingerprint:
+            raise ValueError(
+                "checkpoint ZIP has no valid signed checkpoint manifest"
+            ) from error
+        signature = str(envelope.pop("hmac_sha256", ""))
+        if envelope.get("schema_version") != CHECKPOINT_ARCHIVE_SCHEMA:
+            raise ValueError("checkpoint ZIP uses an unsupported archive schema")
+        expected_signature = _checkpoint_signature(
+            envelope,
+            _checkpoint_secret(job_dir),
+        )
+        if not hmac.compare_digest(signature, expected_signature):
+            raise ValueError("checkpoint ZIP signature is invalid")
+        if envelope.get("job_id") != expected_fingerprint:
             raise ValueError("checkpoint ZIP belongs to different uploaded inputs")
         if (
             expected_pipeline_version is not None
-            and manifest.get("pipeline_version") != expected_pipeline_version
+            and envelope.get("pipeline_version") != expected_pipeline_version
         ):
             raise ValueError(
                 "checkpoint ZIP was created by a different pipeline version"
             )
         if (
             expected_code_signature is not None
-            and manifest.get("code_signature") != expected_code_signature
+            and envelope.get("code_signature") != expected_code_signature
         ):
             raise ValueError("checkpoint ZIP was created by different alignment code")
+        if (
+            expected_owner_id is not None
+            and str(envelope.get("owner_id", "")) != str(expected_owner_id)
+        ):
+            raise ValueError(
+                "checkpoint ZIP belongs to a different authenticated user"
+            )
+        declared_members = envelope.get("members")
+        if not isinstance(declared_members, list):
+            raise ValueError("checkpoint ZIP member manifest is invalid")
+        if len(declared_members) > max_members:
+            raise ValueError("checkpoint ZIP contains too many files")
+        declared_by_path = {}
+        for item in declared_members:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                raise ValueError("checkpoint ZIP member manifest is invalid")
+            path = item["path"]
+            if path in declared_by_path:
+                raise ValueError(f"checkpoint ZIP contains duplicate path: {path}")
+            declared_by_path[path] = item
         members = [member for member in archive.infolist() if not member.is_dir()]
-        total = sum(member.file_size for member in members)
+        actual_paths = {member.filename for member in members}
+        if len(actual_paths) != len(members):
+            raise ValueError("checkpoint ZIP contains duplicate member names")
+        if actual_paths != set(declared_by_path) | {"checkpoint_manifest.json"}:
+            raise ValueError("checkpoint ZIP members do not match its signed manifest")
+        payload_members = [
+            member for member in members
+            if member.filename != "checkpoint_manifest.json"
+        ]
+        total = sum(member.file_size for member in payload_members)
         if total > max_uncompressed_bytes:
             raise ValueError("checkpoint ZIP expands beyond the allowed size")
+        for member in payload_members:
+            if member.file_size > max_member_bytes:
+                raise ValueError(
+                    f"checkpoint ZIP member exceeds the allowed size: {member.filename}"
+                )
+            compressed = max(member.compress_size, 1)
+            if member.file_size / compressed > max_compression_ratio:
+                raise ValueError(
+                    f"checkpoint ZIP member has an unsafe compression ratio: {member.filename}"
+                )
         restored = 0
-        for member in members:
+        _private_directory(job_dir)
+        for member in payload_members:
             relative = Path(member.filename)
             if (
                 relative.is_absolute()
@@ -546,8 +704,60 @@ def restore_job_checkpoint_archive(
             ):
                 raise ValueError(f"unsafe checkpoint ZIP path: {member.filename}")
             destination = job_dir / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(archive.read(member))
+            _private_directory(destination.parent)
+            temporary = destination.with_name(
+                f".{destination.name}.{os.getpid()}.restore"
+            )
+            digest = hashlib.sha256()
+            written = 0
+            try:
+                descriptor = os.open(
+                    temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                with archive.open(member) as source, os.fdopen(descriptor, "wb") as target:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > max_member_bytes:
+                            raise ValueError(
+                                f"checkpoint ZIP member exceeds the allowed size: {member.filename}"
+                            )
+                        digest.update(chunk)
+                        target.write(chunk)
+                declared = declared_by_path[member.filename]
+                if (
+                    written != int(declared.get("size", -1))
+                    or digest.hexdigest() != declared.get("sha256")
+                ):
+                    raise ValueError(
+                        f"checkpoint ZIP member failed integrity validation: {member.filename}"
+                    )
+                if destination.name == "job_manifest.json" and destination.exists():
+                    existing = json.loads(destination.read_text(encoding="utf-8"))
+                    incoming = json.loads(temporary.read_text(encoding="utf-8"))
+                    identity_fields = (
+                        "job_id",
+                        "owner_id",
+                        "pipeline_version",
+                        "code_signature",
+                    )
+                    if any(
+                        existing.get(field) != incoming.get(field)
+                        for field in identity_fields
+                    ):
+                        raise ValueError(
+                            "checkpoint ZIP job identity conflicts with current job"
+                        )
+                    temporary.unlink()
+                else:
+                    temporary.replace(destination)
+                    os.chmod(destination, 0o600)
+            finally:
+                temporary.unlink(missing_ok=True)
             restored += 1
     return restored
 

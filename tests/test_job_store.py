@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import zipfile
 from pathlib import Path
@@ -95,7 +96,11 @@ def test_page_checkpoint_requires_matching_inputs_and_existing_outputs(tmp_path:
     ) is None
 
 
-def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path: Path):
+def test_portable_checkpoint_archive_validates_fingerprint_and_restores(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("BPSD_ALIGNER_CHECKPOINT_SECRET", "s" * 32)
     fingerprint = "b" * 64
     source = job_directory(fingerprint, root=tmp_path / "source")
     write_job_manifest(
@@ -103,6 +108,7 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
         fingerprint=fingerprint,
         pipeline_version="v1",
         code_signature="code-a",
+        owner_id="owner-a",
         inputs=[],
     )
     write_job_status(
@@ -119,7 +125,7 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
         source,
         fingerprint=fingerprint,
         pipeline_version="v1",
-        owner_id="",
+        owner_id="owner-a",
         score_id="score",
         reviewer="Ivy",
         decisions={"page:Y1": {"page_id": "page", "yolo_line": "1", "action": "confirm"}},
@@ -129,6 +135,7 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
     with zipfile.ZipFile(archive) as packaged:
         assert "outputs/all_outputs.zip" not in packaged.namelist()
         assert "review_state.json" in packaged.namelist()
+        assert "checkpoint_manifest.json" in packaged.namelist()
     target = job_directory(fingerprint, root=tmp_path / "target")
     restored = restore_job_checkpoint_archive(
         archive.read_bytes(),
@@ -136,6 +143,7 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
         expected_fingerprint=fingerprint,
         expected_pipeline_version="v1",
         expected_code_signature="code-a",
+        expected_owner_id="owner-a",
     )
     assert restored == 4
     assert (target / "outputs" / "pages" / "page.csv").is_file()
@@ -160,6 +168,67 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
             expected_pipeline_version="v1",
             expected_code_signature="code-b",
         )
+    with pytest.raises(ValueError, match="different authenticated user"):
+        restore_job_checkpoint_archive(
+            archive.read_bytes(),
+            target,
+            expected_fingerprint=fingerprint,
+            expected_pipeline_version="v1",
+            expected_code_signature="code-a",
+            expected_owner_id="owner-b",
+        )
+
+
+def test_checkpoint_archive_rejects_tampered_member(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("BPSD_ALIGNER_CHECKPOINT_SECRET", "k" * 32)
+    fingerprint = "7" * 64
+    source = job_directory(fingerprint, root=tmp_path / "store")
+    write_job_manifest(
+        source,
+        fingerprint=fingerprint,
+        pipeline_version="v1",
+        owner_id="owner-a",
+        inputs=[],
+    )
+    artifact = source / "outputs" / "result.csv"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("value\noriginal\n", encoding="utf-8")
+    archive = build_job_checkpoint_archive(source, tmp_path / "checkpoint.zip")
+    tampered_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive) as original, zipfile.ZipFile(
+        tampered_bytes, "w", compression=zipfile.ZIP_DEFLATED
+    ) as tampered:
+        for name in original.namelist():
+            payload = original.read(name)
+            if name == "outputs/result.csv":
+                payload = b"value\ntampered\n"
+            tampered.writestr(name, payload)
+
+    target = job_directory(fingerprint, root=tmp_path / "store")
+    with pytest.raises(ValueError, match="integrity validation"):
+        restore_job_checkpoint_archive(
+            tampered_bytes.getvalue(),
+            target,
+            expected_fingerprint=fingerprint,
+            expected_pipeline_version="v1",
+            expected_owner_id="owner-a",
+        )
+
+
+def test_job_store_uses_private_permissions(tmp_path: Path) -> None:
+    job = job_directory("8" * 64, root=tmp_path)
+    manifest = write_job_manifest(
+        job,
+        fingerprint=job.name,
+        pipeline_version="v1",
+        inputs=[],
+    )
+
+    assert job.stat().st_mode & 0o777 == 0o700
+    assert manifest.stat().st_mode & 0o777 == 0o600
 
 
 def test_review_state_is_atomic_and_bound_to_job_identity(tmp_path: Path):
