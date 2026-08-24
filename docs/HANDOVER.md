@@ -43,6 +43,9 @@ candidates that the system refuses to invent values for.
 - `regression/finished_xia_baseline.json` stores the human-accepted production
   semantic fingerprints, including the reviewed tuplet endpoints and complete
   slur endpoint chords.
+- `regression/review_evidence/` preserves the original pre-website human
+  fingering decisions. Read its README before normalization; batch-level spot
+  checks are not per-row approvals.
 
 Never update the baseline until a human has verified the changed assignments.
 

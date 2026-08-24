@@ -416,6 +416,11 @@ decisions as normalized ground truth and add
 `ground_truth_accuracy.json`; `regression/ground_truth_template.csv` is the
 portable schema. Private score annotations remain outside Git.
 
+Pre-website fingering decisions are preserved under
+`regression/review_evidence/` as immutable historical evidence. They are not
+loaded automatically; normalize and revalidate an entry before using it as
+current ground truth.
+
 Only after reviewing an intentional result change, update that baseline:
 
 ```bash
