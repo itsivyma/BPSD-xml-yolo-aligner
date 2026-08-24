@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from contextlib import nullcontext
 from pathlib import Path
@@ -38,11 +39,13 @@ from bpsd_aligner.job_store import (
     job_directory,
     load_review_state,
     load_page_checkpoint,
+    owner_id_for_subject,
     prune_job_store,
     request_job_cancellation,
     release_job_lease,
     restore_job_checkpoint_archive,
     validate_upload_batch,
+    validate_storage_capacity,
     validate_page_count,
     write_job_manifest,
     write_job_status,
@@ -112,7 +115,22 @@ def _job_owner_id() -> str:
     """Return a non-reversible namespace for the authenticated browser owner."""
 
     subject = str(st.session_state.get("bpsd_authenticated_subject", "local"))
-    return hashlib.sha256(subject.encode("utf-8")).hexdigest()
+    return owner_id_for_subject(subject)
+
+
+@st.cache_resource
+def _login_failure_store() -> dict[str, list[float]]:
+    return {}
+
+
+def _verify_access_token(supplied: str, configured: str) -> bool:
+    """Verify plaintext or ``sha256:<hex>`` deployment tokens."""
+
+    if configured.startswith("sha256:"):
+        expected = configured.removeprefix("sha256:").lower()
+        actual = hashlib.sha256(supplied.encode("utf-8")).hexdigest()
+        return len(expected) == 64 and hmac.compare_digest(actual, expected)
+    return bool(configured) and hmac.compare_digest(supplied, configured)
 
 
 def _require_access_token() -> None:
@@ -124,18 +142,49 @@ def _require_access_token() -> None:
         st.error(f"Invalid multi-user authentication configuration: {error}")
         st.stop()
     expected = os.environ.get("BPSD_ALIGNER_ACCESS_TOKEN", "")
+    deployment_mode = os.environ.get("BPSD_ALIGNER_DEPLOYMENT_MODE", "local").lower()
+    if not users and not expected and deployment_mode == "production":
+        st.error(
+            "Production mode requires BPSD_ALIGNER_USERS_FILE or "
+            "BPSD_ALIGNER_ACCESS_TOKEN."
+        )
+        st.stop()
     authenticated = st.session_state.get("bpsd_authenticated")
     subject = str(st.session_state.get("bpsd_authenticated_subject", ""))
-    if authenticated and (not users or subject in users):
+    configured_for_subject = users.get(subject, "") if users else expected
+    config_digest = hashlib.sha256(
+        configured_for_subject.encode("utf-8")
+    ).hexdigest()
+    if (
+        authenticated
+        and configured_for_subject
+        and st.session_state.get("bpsd_auth_config_digest") == config_digest
+    ):
+        if st.sidebar.button("Sign out", key="bpsd_sign_out"):
+            for key in (
+                "bpsd_authenticated",
+                "bpsd_authenticated_subject",
+                "bpsd_auth_config_digest",
+            ):
+                st.session_state.pop(key, None)
+            st.rerun()
         return
     if not users and not expected:
         st.session_state["bpsd_authenticated_subject"] = "local"
         return
     st.title("BPSD XML–YOLO Aligner")
     st.caption("This deployment requires an access token.")
-    attempts = int(st.session_state.get("bpsd_login_attempts", 0))
-    if attempts >= 5:
-        st.error("Too many failed attempts in this browser session. Reload later.")
+    failure_key = subject or "shared-access-token"
+    now = time.monotonic()
+    failures = _login_failure_store()
+    recent_failures = [
+        timestamp
+        for timestamp in failures.get(failure_key, [])
+        if now - timestamp < 15 * 60
+    ]
+    failures[failure_key] = recent_failures
+    if len(recent_failures) >= 5:
+        st.error("Too many failed attempts. Try again after 15 minutes.")
         st.stop()
     with st.form("bpsd_access_form"):
         username = (
@@ -145,12 +194,16 @@ def _require_access_token() -> None:
         submitted = st.form_submit_button("Open aligner", type="primary")
     if submitted:
         expected_for_user = users.get(username, "") if users else expected
-        if expected_for_user and hmac.compare_digest(supplied, expected_for_user):
+        if _verify_access_token(supplied, expected_for_user):
             st.session_state["bpsd_authenticated"] = True
             st.session_state["bpsd_authenticated_subject"] = username
-            st.session_state["bpsd_login_attempts"] = 0
+            st.session_state["bpsd_auth_config_digest"] = hashlib.sha256(
+                expected_for_user.encode("utf-8")
+            ).hexdigest()
+            failures.pop(failure_key, None)
             st.rerun()
-        st.session_state["bpsd_login_attempts"] = attempts + 1
+        recent_failures.append(now)
+        failures[failure_key] = recent_failures
         st.error("Incorrect access token.")
     st.stop()
 
@@ -160,6 +213,10 @@ def _initialize_job_store() -> tuple[str, ...]:
     """Apply an explicitly configured retention policy once per process."""
 
     configured = os.environ.get("BPSD_ALIGNER_JOB_RETENTION_HOURS", "").strip()
+    if not configured and os.environ.get(
+        "BPSD_ALIGNER_DEPLOYMENT_MODE", "local"
+    ).lower() == "production":
+        configured = "168"
     if not configured:
         return ()
     return tuple(prune_job_store(retention_hours=float(configured)))
@@ -2376,6 +2433,7 @@ with align_tab:
         try:
             upload_totals = validate_upload_batch(all_uploads)
             validate_page_count(len(page_pairs))
+            validate_storage_capacity(upload_totals["bytes"])
         except ValueError as error:
             upload_batch_valid = False
             st.error(str(error))

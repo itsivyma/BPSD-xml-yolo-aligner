@@ -238,6 +238,8 @@ def load_yolo(
             raise ValueError(f"YOLO line {line_number} does not have 5 fields")
         class_id = int(parts[0])
         x, y, width, height = map(float, parts[1:])
+        if not all(math.isfinite(value) for value in (x, y, width, height)):
+            raise ValueError(f"YOLO line {line_number} contains non-finite geometry")
         boxes.append(
             {
                 "txt_line": line_number,

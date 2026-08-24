@@ -91,8 +91,15 @@ PERFORMANCE_FIELDS = [
 
 
 def safe_identifier(value: str, fallback: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-._")
-    return cleaned or fallback
+    raw = value.strip()
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-._")
+    if not cleaned:
+        return fallback
+    truncated = cleaned[:80].rstrip("-._") or fallback
+    if truncated != raw:
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+        truncated = f"{truncated[:69].rstrip('-._')}-{digest}"
+    return truncated
 
 
 def _sha256(path: Path) -> str:
@@ -954,6 +961,10 @@ def validate_upload_inputs(
             and 0 <= box["y"] <= 1
             and 0 < box["w"] <= 1
             and 0 < box["h"] <= 1
+            and box["x"] - box["w"] / 2 >= 0
+            and box["x"] + box["w"] / 2 <= 1
+            and box["y"] - box["h"] / 2 >= 0
+            and box["y"] + box["h"] / 2 <= 1
         )
     ]
     if invalid_geometry:

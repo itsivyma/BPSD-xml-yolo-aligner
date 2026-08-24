@@ -50,6 +50,10 @@ COMMANDS = {
         "bpsd_aligner.web_worker",
         "Run one persisted background job request",
     ),
+    "dispatcher": (
+        "bpsd_aligner.job_dispatcher",
+        "Drain persisted background job requests",
+    ),
 }
 
 
