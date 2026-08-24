@@ -1,0 +1,136 @@
+{
+  "schema_version": "1.0",
+  "pipeline_version": "0.6.0",
+  "pipeline_code_signature": "17f09f55dc549a791583ab4afc517d3895a37da644d16ab6d01de0725d74bba5",
+  "thresholds": {
+    "fingering": 0.95,
+    "dynamic": 0.85,
+    "slur": 0.85,
+    "tie": 0.8,
+    "articulation": 0.8,
+    "fermata": 0.8,
+    "ornament": 0.8,
+    "tuplet": 0.8,
+    "notehead": 0.92,
+    "accidental": 0.92,
+    "stem": 0.92,
+    "beam": 0.9,
+    "flag": 0.92,
+    "ottava": 0.9,
+    "pedal": 0.9,
+    "tempo": 0.9,
+    "term": 0.9
+  },
+  "pages": {
+    "Beethoven_Op090-01-01": {
+      "alignment_rows": 163,
+      "matched_rows": 33,
+      "inferred_rows": 17,
+      "review_rows": 113,
+      "blank_time_rows": 130,
+      "cross_page_candidates": 0,
+      "required_class_status_counts": "{\"dynamicCrescendoHairpin\": {\"review\": 2}, \"slur\": {\"matched\": 8, \"review\": 20}, \"tie\": {\"matched\": 8, \"review\": 14}, \"tuplet3\": {\"matched\": 1}}",
+      "semantic_digest": "55a0f9f5e133338056163d3690a1c1915f0be7c95e97ac7fbb104af4fb825175",
+      "semantic_class_digests": "{\"articStaccatoAbove\": \"32726a3252d6de63156c4261d3507962411db8a7d6e7e1b715cf0ba73741db2e\", \"articStaccatoBelow\": \"3985b498c1d2a6550b8c3c026bae513c49e297596eca9b510c72c9f7a364cbe5\", \"dynamicCrescendoHairpin\": \"b35fc5a491626da8fe01b84d771ff41a13c7f112b3d67b29f9e0b2da2c79aa09\", \"dynamicCrescendoLong\": \"6ef9dcb425970b2a3b6439d46582dfac3491ff82dc4fbe265d4357f9ad817ef6\", \"dynamicDiminuendoHairpin\": \"ac2e4891b56e0dfd49831edd14e14d9bc8f9c20a8870e4d9b8ccd304065cdb77\", \"dynamicDiminuendoLong\": \"b875d2fdec7c1b8797083293d60019cb622acb904ff49800550e18b38bf9e7cb\", \"dynamicF\": \"3befbc52c3e36aafca678d8dc17c2f489661cb8b1dfddd3c94ac17a4c09d18da\", \"dynamicP\": \"3be946758489c2e28d259c38b79c0a87afca979a5317ce2ec22536ebe4b9db12\", \"dynamicS\": \"8e7d26ddcdd27f0dd3a4de8a012133dc5b31f2a3b23c1b98215a19819c5f77ec\", \"fermataAbove\": \"1d9872a5da4d4cf122e109457c3e6ed1e2e11f03aa964d7b0b222c5fc4b3bd34\", \"fermataBelow\": \"a7547612835ffdc9f1ecef37f36f0c62f2fb07c904ff6009caf05d0cb8e6e8a3\", \"fingering1\": \"ed8478ec23585256635fcbc17773f5c2963468395edde9ba2966d948d3d054c2\", \"fingering2\": \"21aefb19b7b03722bf38015e5788094b6d7fdd814e7f6c89305040924624a04b\", \"fingering3\": \"f8cd86cb60395b2db90a2ca4d74a52702de236cd2875f0b4a551ddfd8ed3b120\", \"fingering4\": \"dcfdf72a6ef8a7e67e10b4934cef68788266e89ca20e1d583e4b89dfbc09a482\", \"fingering5\": \"b74bb36bfbf8e83221d453a68457ce22287e452af6df16fa65d469db645d52bf\", \"fingeringSubstitution\": \"84854b46ac9a9e2074e31e21a3d3f2706a90f2cf4a0d0e07f703f299919e5f72\", \"slur\": \"31ac93ace1275fb5ee7cfcbc068e668ba5551f2856a94848fbff81ad71d3cd42\", \"tempoInTempo\": \"0653eef52a0f1745c35e093957ad0d82ed55b6fe29db382161f4227949fcd86a\", \"tempoRitardando\": \"2b7f22bdbad73f502a5bf8ab0db75205f3c3abe79f5eec7223889ba56e937897\", \"termMitLebhaftigkeitUndDurchausMitEmpfindungUndAusdrunk\": \"61984a5f14ba991a8f9a8a6c34d62cdf6faf9bf155393c6bb1150be340ea187f\", \"tie\": \"fa018d1f36d8fad36bc25a9518cd0114c38ac8fb820539ab8d6c16791310855f\", \"tuplet3\": \"5b0ea1e80b478dc587701499012da5fb35972e13ee0fe983a40b190bfce60dd6\", \"tuplet5\": \"f9ac376ea42f6aedbaf33032417797108d7062066688364ab09ac8f414cfad17\", \"tuplet6\": \"fcdac15491983cdc33ad83740f59935e2f5353c1013283a9f0787fe25b50ef17\"}"
+    },
+    "Beethoven_Op090-01-04": {
+      "alignment_rows": 124,
+      "matched_rows": 37,
+      "inferred_rows": 17,
+      "review_rows": 70,
+      "blank_time_rows": 87,
+      "cross_page_candidates": 3,
+      "required_class_status_counts": "{\"dynamicCrescendoHairpin\": {\"review\": 2}, \"slur\": {\"matched\": 9, \"review\": 21}, \"tie\": {\"matched\": 3, \"review\": 2}}",
+      "semantic_digest": "d7c63640cd6e9e1f649c276217e33e4214ca74a0e90665354ba5f0c0462329b0",
+      "semantic_class_digests": "{\"articStaccatoAbove\": \"97f338b9260acad299ecea1bf9c85c4211b14321904b9047a21f62b981727ea1\", \"articStaccatoBelow\": \"85829170038d590cc8a2e1a08b712a4245e34b66b0629f6fa010558ad1f3e169\", \"dynamicCrescendoHairpin\": \"ca6adb3d0df1f7ddffecb2188233ad31f9c0f1ae21bf9277d1457039abf55811\", \"dynamicCrescendoLong\": \"047ceeb37d949b36e2b00529e5c803411e7e09e6351130b396952a5d7daff606\", \"dynamicDiminuendoHairpin\": \"fdc1896a209e2412ff43c2bf559f8047d681edcb8355166ac7f7924f21c4ed1b\", \"dynamicDiminuendoLong\": \"903c7abdfd7ad76876a6405ca5c2eb9708a7ec6170db3b4b7a40eb22b72a806e\", \"dynamicF\": \"adc9d8e4425fde2e3aaedeb0f52b3397c26873d78b0d6b93b8196d29cbc10e7a\", \"dynamicP\": \"ad16cef0f0eca2db814021a34e26252784c06e871e60a96ebc4b660742d8201e\", \"dynamicS\": \"8d8018b862466f00647d35e33075c46595affad02bd77facdb03c7515ca7ce15\", \"fingering1\": \"d339997c2d26dc3ad3ad2e345c7b0789ff4f5a082301b483492ddcea151496c0\", \"fingering2\": \"733795171ad468bc2ad789519cc9372582c07ac87cdd836c7fd522a92b891a64\", \"fingering3\": \"6faa730f56a2017276e8a435f78981daf6af6de7a613e31831f66f6ecb199d70\", \"fingering4\": \"d2799c5c1e5e16aeac840b2a52da71bf9c145d4b3128e1c9298db9859fced63e\", \"fingering5\": \"a310a0aa22692e57e22c4f86b0fda7519f8af5c0a83cc055a872e80e644468b5\", \"slur\": \"f92460c2fa352b0c0befada924f91784900de21662ce90c249d465673a2500ef\", \"termPiù\": \"35c7ab1b35bd74c20af51f8f78b6477fe21df0b564ec5282f8408c8d2680324e\", \"termSempre\": \"525196ca4b5260f05027677ad1c6a6e361fdf6a3ebbe92ca6c58dc4a632a162e\", \"tie\": \"18e3d541a37e02269c1bcef690c6afd586ed74d27979695935afaa8eb6c5ce2a\"}"
+    },
+    "Beethoven_Op090-01-05": {
+      "alignment_rows": 105,
+      "matched_rows": 26,
+      "inferred_rows": 10,
+      "review_rows": 69,
+      "blank_time_rows": 79,
+      "cross_page_candidates": 3,
+      "required_class_status_counts": "{\"ottavaBracket\": {\"review\": 1}, \"slur\": {\"matched\": 7, \"review\": 8}, \"tie\": {\"matched\": 4, \"review\": 17}}",
+      "semantic_digest": "31c6203ed4f0b89432806a4ec0b19d62dfeff7b349a4bd77db0ccaae707d3686",
+      "semantic_class_digests": "{\"dynamicCrescendoHairpin\": \"f542ba20906c4676c1186666aa29c133a5d269cb82197f57b3e67d1f2e229f8c\", \"dynamicCrescendoLong\": \"93f7e94ba5b89fb8e6170f23014eb99e7030eea2f226c60fc17c04e867435a43\", \"dynamicDiminuendo\": \"777f4ebef9a5bb1125a407fa96c689f9d3cdd1f2ac2179d60cdf49fdc772a7c6\", \"dynamicDiminuendoHairpin\": \"82462f84e711db6a040cc2c80219f9ae59ae0c5ffc085b040c30d574440de59f\", \"dynamicF\": \"044a3ec0f614db47dd0980959fd3479c054c49f0c845754b669063c132c20437\", \"dynamicP\": \"608662e13bca24f75b92b362362d1115ed2e39be1be04722491f88b277ff36a0\", \"dynamicS\": \"72d94f3e75c496d059e6dabd7fff3ee8576c0c07a0b5662aa5ac694dfec2e406\", \"fermataAbove\": \"a688560f7d307b3d0fe5c6c532ff63614c8f576d0bd3c2635abeddae5006b463\", \"fermataBelow\": \"73796c59cea6e16e220aa2313783784838a24d5a588e6f40a922e38f150427a3\", \"fingering1\": \"5b38edd009c5be03b5001e4186849f26bec15ab0b0e8048f7fda81c0bc905819\", \"fingering2\": \"40218ba553c10a12269aecc6cd674267a166c05c0728f0279fb5af6b19143029\", \"fingering3\": \"0319847ac7b10423cdcbf284e327ee994abdc3faeab7db28710ef25a8dcd40c5\", \"fingering4\": \"1c051caef9e366aaa098bb12fee0093b06a6a31b3bdfc65f18f3e5e61370bade\", \"fingering5\": \"01cfc4602d04f8204cdeb99e9f058207b7c0f6ced288cf4b70d6c406f4fe4c1d\", \"ottavaBracket\": \"4b54843e1d7af4584ee5ad1ca40e09420e5b52d76d906b1c70a02ae4c0cbee14\", \"slur\": \"4877eec623f0ee24a54dc649cf69576bd2782d9a4fc013fad58153c6ef3b85f1\", \"tempoInTempo\": \"1f5b85fc038a8db6c11c2c4ca8e269e1870d765329ea205b6cbe590c8c1dfaf5\", \"tempoRitardando\": \"8106a4fc8ad79254068a363bcd0ecd88545f4b5311d2d8cf105b0ff39e66eca0\", \"tie\": \"9004c9665e8b9b25d89ecedb0e7e43ebf2ebd44860fcc70172688f960d2770d5\", \"tuplet5\": \"6ea89f300302ce4bbd475f585d948690c96fc14699d5639ab1c5c926a25f8f54\", \"tuplet6\": \"20f68a806d2bed412a7f40f7125c10fbdac510911e410d33be08647544c8f666\"}"
+    },
+    "Beethoven_Op090-01-06": {
+      "alignment_rows": 128,
+      "matched_rows": 31,
+      "inferred_rows": 12,
+      "review_rows": 85,
+      "blank_time_rows": 97,
+      "cross_page_candidates": 1,
+      "required_class_status_counts": "{\"ottavaBracket\": {\"review\": 1}, \"slur\": {\"matched\": 15, \"review\": 10}, \"tie\": {\"matched\": 9, \"review\": 19}}",
+      "semantic_digest": "94f28cb1cb2d33100b9b3d41da2d96b61c74c2a804da7c3051ef6c69d6e70644",
+      "semantic_class_digests": "{\"articStaccatoBelow\": \"8aa5a6f0e1699b98307f14f927902fdc1f869a2c963ad2e5fb03771d4ada1c34\", \"dynamicCrescendoHairpin\": \"7b0134bab5b4c2784ca98c94e863ebcceb50e6ae3d6e5ef2e6a8e8eaecce9e80\", \"dynamicDiminuendo\": \"3037cb320308111a8e27ec3178aba515d7d084dfa1e49f6a0cbbee53ced9cc2c\", \"dynamicDiminuendoHairpin\": \"db48d25655c030827311f35271aa90427ea5a99ad29aa7ccbd7001a02e181e56\", \"dynamicDiminuendoLong\": \"dea0d8bed8eae17f9c9a9681a4c1b6f817a7df8729660dc3e3c1dd0d7ad4f330\", \"dynamicF\": \"5bfb42de9123f4fd6c5ebfee7fa9b4488bd049101d1fba314de88c7096ed4acc\", \"dynamicP\": \"fca5f24af2ff32c1a83f49aaec481e38c2ac5afdc1af59e0b07e6d2cd8afb5c6\", \"dynamicS\": \"641115a3b85b740c3dc8ca629f62c69b15c0f1cff15cb75033acc60b17799c3b\", \"fermataAbove\": \"8543c4ced368f0cf31f89e3dfda61e2ebe77881fadd1ffca0841673bb03ea486\", \"fermataBelow\": \"2bdadc5640b2a8a46599fd171392c0c0d3d1dd4a5b2ef9caf5cef1d9cae1bf80\", \"fingering1\": \"ee9b02eec82cdad27272224cc5434b3926fb28c643895f18a7fd0b61b3212d28\", \"fingering2\": \"659082a60c880e54eed4ce528526e74dc97764bc9d0883d939eb9c28d0d7730e\", \"fingering3\": \"c54795dca2f2df4bac8e66b86dd7f79b21f05c9569769d7c9adcd88c61dd7493\", \"fingering4\": \"17d0f594b5e0814533ba4a0b644efe2513a920d2ab4ca314360e594367a8e15d\", \"fingering5\": \"2e5792d98d28c0b4c382395b8eded7d5f184aa8653f115e21dfc3eba248d55ee\", \"fingeringSubstitution\": \"604e01723de40d29bc0cec612d24c48664aa27180e33e3e7e170e40f0c0256bf\", \"ottavaBracket\": \"f78d0179f6e8b00d19d5897d6373e678ed271c169fc483a31b56cc8230c8805c\", \"slur\": \"ba594a1dda4008f696e726a1e148d2078f6ac4291bdcd1a227c5568e712c9f1f\", \"tempoATempo\": \"db6db5e778ec18930b5fe1c940abae11cfe36c5e1bbe63636e0bb3298103cbcf\", \"tempoRitardandoLong\": \"24a329f80f828acf36e964d0788354c8b761920adb829e51ec541932089a460b\", \"tie\": \"38fc245474e081d5009914729673f15dca3b04ac06675af63f1d3af1d450a6d5\"}"
+    },
+    "Beethoven_Op106-01-03": {
+      "alignment_rows": 203,
+      "matched_rows": 12,
+      "inferred_rows": 28,
+      "review_rows": 163,
+      "blank_time_rows": 191,
+      "cross_page_candidates": 0,
+      "required_class_status_counts": "{\"keyboardPedalPed\": {\"review\": 1}, \"ottavaBracket\": {\"review\": 4}, \"slur\": {\"matched\": 7, \"review\": 17}, \"tie\": {\"matched\": 5, \"review\": 23}}",
+      "semantic_digest": "9c2f373f4452dfd2f907e26b3d91480915c280c4d81f83374a9c41398ada2f8a",
+      "semantic_class_digests": "{\"articAccentAbove\": \"81949832dbc128ba8568d69ee70e6d075e060cdbaeae02ad7c8e45900559fe0a\", \"articAccentBelow\": \"01d767333e33f0e4824fa5b5eedabfc5c16c97e085fb7f707e90f9038e728eca\", \"articStaccatoAbove\": \"592e207c12cd257c0e152b1ef5ec42f3880b4be0170c130b9d1fa84687d977ee\", \"articStaccatoBelow\": \"706536dd64bb1917e184b29eda21e12753f7f4ec1bc8d93339d604243abebcba\", \"dynamicCrescendoHairpin\": \"feac17c218f3a721d75931d9c3d23dc7bafcd7955619f68d891865dbc5c93caa\", \"dynamicCrescendoLong\": \"5423e16508883ee45fc66589bcfb216b380c2e16f3ab7ebe6f6bb8f092816d0d\", \"dynamicF\": \"d6e5e371c6a5c2e3da087e87e831b4a66c75f5d9d93a10549a348011579797d7\", \"dynamicP\": \"9341a39f107d016c3992d84d722ad31a9628d40d5f33da2cc2950e50dac82c87\", \"fingering1\": \"9838651a19ce066de3859411e740c8c2972c26fcad1813f11e360a065d6848b9\", \"fingering2\": \"f3d246b668a84263604a5c26b21c7c2338012ce2414bebb216d4c90cd4b49c15\", \"fingering3\": \"95a15f73977a6ae9318942db6e22d594985cac3f019611772a478962c638fe04\", \"fingering4\": \"58364fde8fe5c141181cc6123e6683ebf1fcd378cf4c2524dae9f1da9bf4f2a2\", \"fingering5\": \"1ca21fdf3b1658cb778afe0abd597ac7e0c8ea4a1c64005e838d59870ef9daa0\", \"fingeringSubstitution\": \"92d3268fe7479fbfb96f5c3970398cada402278e91eccd667a244d20fc12a3c5\", \"keyboardPedalPed\": \"06819d7bc119b7ca7057c45d0abdea6a3d4336d63703dbc94977964b4bb75b0f\", \"keyboardPedalUp\": \"21ebb884d8fced9f7efae0194da2725ee24754f5eb5b96b0bae0f06bbe4069fd\", \"ottavaBracket\": \"cc8b390c0b9d9079eef99c79dc3b19adfb29f65a1b5a6967a86043a1237b04c4\", \"slur\": \"a58a224bde47945b9c1e222efa6f06f34cea5661263ee3b39b8cfba3abe3ab70\", \"tempoATempo\": \"6083a026bebfae61d794640cddaa537a91a89e2f2239fa2f3b1454b6a0ee92dc\", \"tempoRitardando\": \"9387cac19e86ffdb57c8ffef10b7e7f34c8c147bd322aca93f9251f9f6bb4e0f\", \"tempoRitardandoLong\": \"8d7fd0e32a9c0e81689317273b3ec671759cef696a76da8b4bb62766d628e8ce\", \"termPoco\": \"4eedadea0ac2c72c73084994457e88299f7bc4c21d7a4f3332c404f76d9a2735\", \"tie\": \"3316edd6d6f875005a6ccdc9a277551322dea493f2bffd257db9ff6f2e2a318b\"}"
+    },
+    "Beethoven_Op106-01-07": {
+      "alignment_rows": 176,
+      "matched_rows": 13,
+      "inferred_rows": 13,
+      "review_rows": 150,
+      "blank_time_rows": 163,
+      "cross_page_candidates": 0,
+      "required_class_status_counts": "{\"keyboardPedalUp\": {\"review\": 6}, \"ottavaBracket\": {\"review\": 2}, \"slur\": {\"matched\": 4, \"review\": 26}, \"tie\": {\"review\": 32}, \"tuplet3\": {\"matched\": 4}}",
+      "semantic_digest": "979890d8f82837499b0a609058de45ec47a187562fcf9b6a9ad9759157974621",
+      "semantic_class_digests": "{\"dynamicCrescendoLong\": \"1c32144160cff894d1c601c3aab2748f878d7ed71fd6d3d0559306d2843da483\", \"dynamicDiminuendoLong\": \"fe01693ffd7abd602ebb129f7120bff1bd2a8ae5330a118446ae33d690f1117c\", \"dynamicF\": \"71929c66bfad31f3533dab149238be6ab33a26f1a8f3a29d083ceabd190eb1a2\", \"dynamicP\": \"9879e9be36aee384c2e53dfbd60a79ac1f5095df551c890cfb1b5417bc4167c2\", \"dynamicS\": \"ecb89f120aa142e8e42dbef629624e1672b991881406dd43263475f631e9e5fd\", \"fingering1\": \"666fd949351c66fb3b0ecaaec019349d17c170a125551b50f85e1ccc09614455\", \"fingering2\": \"fe24f1428e4ca6e5be4e6e434b2400b448b8b8daef25b9a28a646a4ad55bf0d5\", \"fingering3\": \"c6b6e03de2d8c71ca471934af8928412596e39ec07110e8f9d83b1f46f8c7817\", \"fingering4\": \"7a03ca9f36cf63b95efb4e35fdb9fb9b41352e7414e91c966fb6b721aed56562\", \"fingering5\": \"b06016aa577bbd2da2827e1f3ccbe191693d23f2851f0dab928f42106311601a\", \"fingeringSubstitution\": \"863eedb1ecb03c93673d7bc62112d5278001aeea80661870537af6c2830e0673\", \"keyboardPedalPed\": \"1982f012cb3756c02f1eda97b7df59ea82bdec7d05c53dfe06ef4907b4b311fb\", \"keyboardPedalUp\": \"75b38f1fac6d5ab89e7ae07434791af2c8d3bca5287aee112a238c7a152fe17d\", \"ottavaBracket\": \"9db2cedbc2143e47f51894186e399458e6ea95fbc0073501046567eaa8b7e938\", \"slur\": \"f4ea211ad1cb5501b7777c0545cc204c8b4aa624eb1c07bcb849f357ca0cc4df\", \"tempoATempo\": \"c418038b6964475e79874b32bd6911a476fd9e6f796fb9b1f176c5178c6cae34\", \"tempoRitardandoLong\": \"929e6ecdd7fe01acdd095e7844417b954551c14f8e2c6d46158c99b2215d616b\", \"termCantabile\": \"e147ffdf15de4c605ddbf043dca182dac0a6282c20dd60fd66930235b9f19a7f\", \"termEspressivo\": \"b696bff7ef4761ee64759ae35dc2ce89d1a83e0f5f32c53cf844738c0629baf4\", \"termPoco\": \"4b3c91b024b0b6e780229a5a637ebb1a9db2daafb1702ab88fca5605f116ec88\", \"termSempre\": \"7f830accfacee0e7dc2a8cb85b0a457c3137bdada459e918d9ed2588994b692b\", \"tie\": \"f33569fedad7484829375f90479788ab1e12dbe977c5bddfcbaa4fd2b4781df8\", \"tuplet3\": \"425aebdf0a9f6dfabd1a5d57c4ad2429163e483ac83d7ad6bc1734f914b6daa9\"}"
+    },
+    "Beethoven_Op106-01-011": {
+      "alignment_rows": 180,
+      "matched_rows": 15,
+      "inferred_rows": 12,
+      "review_rows": 153,
+      "blank_time_rows": 165,
+      "cross_page_candidates": 2,
+      "required_class_status_counts": "{\"keyboardPedalUp\": {\"review\": 2}, \"ottavaBracket\": {\"review\": 3}, \"slur\": {\"matched\": 5, \"review\": 24}, \"tie\": {\"matched\": 6, \"review\": 19}}",
+      "semantic_digest": "0ce7dea451622e1887d0eeb4bb47c78f991cad6d760f8a7123427dae0f53b78f",
+      "semantic_class_digests": "{\"articAccentBelow\": \"ae5d70f190a46981b5e996172295da3ca6c8dac99b4c029794082d15e3caa2c0\", \"articStaccatoAbove\": \"97696408b9571fac4332a34526480de89c73299cbe615d6d529a27ce546973bb\", \"dynamicCrescendoHairpin\": \"5b1c73c2d7d79f0b6f18b54c6bee8897e3a12eafa656c205d9bc379396576eee\", \"dynamicCrescendoLong\": \"cd19fc7b412487d38ef95a7379176322f24054515844468e72af752073abbd06\", \"dynamicF\": \"3aee76b4c454a115a9764bdefbbe4db7f3341d5c8833d855b8f985f338f3b8b1\", \"dynamicS\": \"a968dc1720b69d1837efd49831ac7ad9ec948cf0cbb3ca4d3f2623d870004a51\", \"fingering1\": \"d6829ea30c5676982af9b4546d8d5413c47eb500eb984a0b2cf9b8d386da81db\", \"fingering2\": \"07269edd0951261a8b71209dc19b20d8b8bedd61bb350253b8cefdb0b0179617\", \"fingering3\": \"aeae3020c1442ff3ee8167e19d772e1e0634302c5c878fae94f66838d1cafceb\", \"fingering4\": \"4a96c21f4fee7b29b03af636852f6efe7752e82c3c8070aa779cf64bad866d5b\", \"fingering5\": \"4c059a3db317ca163b5a910bd79623702c1cc2a324382cf6c4459f045124a9ec\", \"fingeringSubstitution\": \"175fa4971bc114bcf4ba5b654ac535261e8098832cc28ec9af46ff9035deb652\", \"keyboardPedalPed\": \"89070ae3ddfea41aef9b0238e7840820ec98b9fe76dd70addd7ea3258000a542\", \"keyboardPedalUp\": \"501ae9ddc1938b30f24fb077ff3b98f030bb2a695b513b970c2bc4c395f859da\", \"ottavaBracket\": \"b4340b85c1b8851b2a30eaed5099aa4a59e131b9a1add354515b8654e7452e07\", \"slur\": \"b9c10a3ecb231346022c6eaed0f09b58d3b35f9d1250022c792bd8885772a8e7\", \"tempoATempo\": \"c0e76737f573b94cf749ebab8277be4e5f025a97a7ffe4efc7d29a4b7c5b61f7\", \"tempoRitardando\": \"7550beb0039a015dd7602b11223013a518f2f98dbf30e011a26acc1fa04e1693\", \"termPoco\": \"a62e027870883fbbdc3f8e22684abe84d7c1a9448f0208b1676a36c9084a4a04\", \"tie\": \"f9e1d8a82a753fb8088ea73b55185021aebce6c0395fb617e0c9788e2bccda03\"}"
+    },
+    "Beethoven_Op110-01-02": {
+      "alignment_rows": 262,
+      "matched_rows": 24,
+      "inferred_rows": 21,
+      "review_rows": 217,
+      "blank_time_rows": 238,
+      "cross_page_candidates": 0,
+      "required_class_status_counts": "{\"ornamentWiggleTrill\": {\"review\": 6}, \"ottavaBracket\": {\"review\": 3}, \"slur\": {\"matched\": 6, \"review\": 32}, \"tie\": {\"matched\": 7, \"review\": 4}}",
+      "semantic_digest": "e082d9aa919817b0f9233b8a24c6e19541d62e6ead353f66b533bed8fd2d434e",
+      "semantic_class_digests": "{\"accidentalNaturalSmall\": \"40f003fd3d70ef160ca7b6f8aa93627858f2d1d84e8f5b35f4451efd97ee140a\", \"articStaccatoAbove\": \"864748000a28f9ee6ceb94a291a7e9121ec0d0434698e74becc585f954bf1f38\", \"beamSmall\": \"841e133ab416f564d7a4a25dec056f19dfb0db9e85e4b1ee0f2785c31d734c12\", \"dynamicCrescendoLong\": \"f5ea2cdc663999a03bbcc04bb7d1239e4d03fba36015f550fa353754d9a81077\", \"dynamicDiminuendo\": \"136a9f679027621cd6d5d7ca28000387e6ca897299473fe01730a916190ea2f8\", \"dynamicF\": \"a6ee12cfd98982be02e276f4304fb7727491e848e7f3b6f9fb767f3b41847f04\", \"dynamicP\": \"ecba57bab29e2617c53ba31c5f902aa6c0a1139695947afa0df161aeb23ef701\", \"dynamicS\": \"b736d5cd58e3f2b7a9c40fc0750e029592d92621950130958076bc2f4e9e0629\", \"fingering1\": \"e47823ce74fcabf55c009d4abb50b6b78b2cde070e6cd3f817c1929f7113f293\", \"fingering2\": \"d6fbbc0abc19102d6b22c6e61d61209289e12b0e5f7394ae02f26694669aea5c\", \"fingering3\": \"9ed8f3c69ca69f0da55b76a9a19db8c77ca4664180a68e68a98b91d0ae16c454\", \"fingering4\": \"4fd8c8b1395ed7e14e76e9dbc29da18be0a3a0022c0140cff784a238c84357fd\", \"fingering5\": \"c4a69342b400619fdb64459d71399da0b7837674bf7e27ed4c9f451f3a1ffad8\", \"fingeringSubstitution\": \"069207c230112f76988f3436ba95cb7e82b39caa5783baee775f97a4fc96e95c\", \"noteheadBlackInSpaceSmall\": \"923678f4b1e687f325e6ad69f662378969eeb2f68e4bb0acbb49fc1569e597c7\", \"noteheadBlackOnLineSmall\": \"b23e3c1ab8c74c5cade1f00bac2171f3d5429dc8e485f7222820022e76363213\", \"ornamentTrill\": \"c813cdd519e4f27870d87182e2d035ab75667b46871a981606ec6e08e5cf973f\", \"ornamentWiggleTrill\": \"9061da6ef2339b6e82c515b7b7499136bb6fd6e06982d88d50be34f5897f29b0\", \"ottavaBracket\": \"2725d1cbb80382b59103bb83c671d26f691925efb77adf882ea852580a4a19ba\", \"slur\": \"ad609ffb9c61f46e4fb20f5be95486841cc26d4f69c1199049a27c214756ac13\", \"stemSmall\": \"d698f143f257edc364e4c8cdac6e9bb297a64c0a151db2568d7d26e3a109b5c4\", \"termDolce\": \"1903505ca1ab5f8ce822944f1ab88d1243cea2b0db75e0163e014f92a3befbd8\", \"termLegato\": \"098ad322f01cbb9092b8f4d7c2c32c7f248aa6f52ebfee8cdcbc7081851e0596\", \"termMolto\": \"758744c59c177e2dcfdcb237455af382cd69fe15f103df3627e8be4b4a14150d\", \"tie\": \"72a12cecd26526d828b0b409ff355833f4ddbf6ee5e7d20c11e9ecf65ffbeb57\"}"
+    },
+    "Beethoven_Op110-01-03": {
+      "alignment_rows": 147,
+      "matched_rows": 13,
+      "inferred_rows": 25,
+      "review_rows": 109,
+      "blank_time_rows": 134,
+      "cross_page_candidates": 0,
+      "required_class_status_counts": "{\"dynamicCrescendoHairpin\": {\"review\": 6}, \"ornamentWiggleTrill\": {\"review\": 1}, \"slur\": {\"matched\": 7, \"review\": 16}}",
+      "semantic_digest": "305a327b95a79730cb93919305193a559346685abf9b4ccadf5acdc52c728e13",
+      "semantic_class_digests": "{\"articStaccatoBelow\": \"e83f87a146f56bbc9e529f4a0ba53b622980473ede31a3066679c1040cb2827e\", \"dynamicCrescendoHairpin\": \"98e5b9f135f3e22354793e665a7ff2fc07b5a48005c268d76ba233aa5b69e8b8\", \"dynamicCrescendoLong\": \"ac5e7b8a44db7f784758c273a450589c828056a99395069ac4612e537e6ccb87\", \"dynamicDiminuendoHairpin\": \"dc43b7faa26347dbef2492cdd22680c3a972213198bf71f08bd63258fc58b41b\", \"dynamicP\": \"226e4088dce89155f2538da2bd757ba8308d0b23dab94795c394d3df80f84b32\", \"fingering1\": \"26437a66966d3cda94b1d022ddee96148a76485369b0a9ded7cf29bd572b5a84\", \"fingering2\": \"661f256d70bab0d721692af18a8c17a307f3d804cf3902732658927df29dc4fe\", \"fingering3\": \"36572cb8dbcc97d0e9ebe9a285afe99832f902a06eb0d9a7ffa4692296e20af0\", \"fingering4\": \"d2f30c03bd59ad7db9b83318d613292b9a533ff66e431fa99f8d828394308ec3\", \"fingering5\": \"9c12eb95b82e4a8fbb821c87a895310c6fed4f23a28d206f22259a0739ca4926\", \"fingeringSubstitution\": \"84c909aaf86a691f318ec7f149f59a1737fe70a8690b0fefad858b990b4d1d2c\", \"ornamentTrill\": \"2f37234b8925ad7dc374de8c58b89c47e2543898bad86d9b2953904c2561ce5f\", \"ornamentWiggleTrill\": \"3048509e331120aec8e6fc2e8027be0cc4d0c33ce04abaf3e640c1ac842a0b49\", \"slur\": \"e85c77ebc97763625be8e30723b607d55765048867e6fcbb8771eccc962214ec\", \"tie\": \"82c5685109fb010709329bf1f785bce72cc9e1c804bb617a77ff006e53f8b566\"}"
+    },
+    "Beethoven_Op109-01-03": {
+      "alignment_rows": 277,
+      "matched_rows": 23,
+      "inferred_rows": 7,
+      "review_rows": 247,
+      "blank_time_rows": 254,
+      "cross_page_candidates": 1,
+      "required_class_status_counts": "{\"keyboardPedalUp\": {\"review\": 4}, \"ottavaBracket\": {\"review\": 2}, \"slur\": {\"matched\": 5, \"review\": 50}, \"tie\": {\"matched\": 12, \"review\": 21}, \"tuplet3\": {\"review\": 5}}",
+      "semantic_digest": "bb478b2dd0b0bd6481b1d8e012e887ae40ee9aa0444363e2dee9fca6e209be19",
+      "semantic_class_digests": "{\"accidentalNaturalSmall\": \"9bb590df13e45c7cd5e444f2ade2824c7aa19017262233de453ca190762bd38a\", \"accidentalSharpSmall\": \"556893b52d652a035adee0ab868515f1ec15b3a3251bf06fb2de380cd023e78b\", \"articStaccatoAbove\": \"9076fce2114df24808b35fdc3298a1dfe30391a24aefe20f49ea7bf794da8ddb\", \"articStaccatoBelow\": \"aa6e7e66c96d5005a011a61070cccc36598e1738b2cede72b063dec45683e7b9\", \"beamSmall\": \"5d7041ea0f684c45edb36f6d56f3124fc08124bb79e387ed5e191234a63df078\", \"dynamicCrescendo\": \"2cc1025ab089a3142d56e13dc879df31a463113178a18b43e5c2343cba2cf7ad\", \"dynamicCrescendoLong\": \"6b86f247a8606764f1729d202ab27b369143f84ce830260cc0e9b5d277bf606d\", \"dynamicDiminuendo\": \"8ebbfdf1fc541c55f8fb11a0f06a60cecda3bd99c82fb4ac541a5f8fe5caa3c2\", \"dynamicDiminuendoHairpin\": \"1b9e01eab833c6d19ebe832c98fcfee6efd766cc7c417d271cae844ba03fce3d\", \"dynamicF\": \"738e97d1e27da10374d853f31d992c7a3e4d39c4ccc24ea70be21bfae4aa6917\", \"dynamicP\": \"f800125f80f33d583887785c0a41fa598343b43f974deeca84f2431e8cd7b740\", \"dynamicS\": \"9b0f49b8ea9d3305adebb9bda50c0e0449d327e1fe75f40a70b3d548f81aa603\", \"fermataAbove\": \"f2b60d59e32ee49a4eedd479d90fadb0dae84170416e9463ece40632e53e073e\", \"fingering1\": \"c5f971fb1bee5d72cc3d7e8dd3e33d7ea7d61590e649d28ceca894ace8b681d2\", \"fingering2\": \"2078453aa01074587fd0ad1a5a6f29a07c483fbe4adc83c6a88b20e50977fc64\", \"fingering3\": \"1a24ebaa8b46ca5782b72feb58ea9e2cd099fe5888369e850a7facbe5413dba2\", \"fingering4\": \"6faf9841a55c0ff4601e8c0b43d8bc88b213d98980d84088a4b32bb66fdca9bc\", \"fingering5\": \"344a54c1e80b376424aaf6cbd4bca8ea4749ad287329ac1ca10f5a03fffa7ce1\", \"fingeringSubstitution\": \"860493e25b803a6eafd447d124464c9b54a3f4b98c3946fd3cb9b08d576df8a3\", \"keyboardPedalPed\": \"55d548e15c92ea9571133e5859bc74dc7d9f6f3e2b4bc9ad852ee6f132484eeb\", \"keyboardPedalUp\": \"8c4e7b259c7acce3776f744214e3187c4e8c0653895316e47b560a6975a697c7\", \"noteheadBlackInSpaceSmall\": \"b0eb8ddc3d29164d5e26e87c3d772e305cdfaee90cb856bf1d4d9b5f0cc2fc91\", \"noteheadBlackOnLineSmall\": \"b306e0242880779f26431146bf240cbd3d367172071a7b84b9100ffd99fcab4a\", \"numeral1\": \"3e1f46547689ebb35ef57e80fa07b55e27833d586555b95ea414bc012458af2b\", \"ottavaBracket\": \"e958fc01ba19556fdb35d82bbeb4319a359ebb20ab167d603b45094f35e195d9\", \"slur\": \"92413ba4112b673847a0b13e38c5c87924b0f142ec61c96629a980e4f1ea96f8\", \"stemSmall\": \"47949da944a8dc1e6488b98808f4fa74f6a84df69a7a98988aab0e870b84abdb\", \"tempoAdagio\": \"6cadde28ef8c2eb2f08b49c9b8d85b2e6ae861710588d58d45b8b91090db6150\", \"tempoRitardando\": \"f9a1ccc4b817698a5669dcce853b90aa5a3ba2fed00878435deec915f97147b7\", \"tempoTempo\": \"30a02fe3cc227b5a67d539a268ec98b7e6c7103a95c5721a21329e218f81dec3\", \"termEspressivo\": \"e2f0e5b5a458b1834681abddf4e8558e2368f9318d362782c63130cc42939950\", \"termLegato\": \"0175859fc3997ed620ab145a48635d71a02dbe58437591484f6057bfde76a6e9\", \"tie\": \"7ec75030c8ba1298b49c0f4f2476eb1539b1af192cd259659a26829064257d58\", \"tuplet3\": \"7438ec520c1bb57cb269749ec6e1960330d7815c29ee16a940837faee4caee68\", \"tuplet5\": \"d71d04457457ef809b7652e820017d4717567f8b50256a0d1d3378574df1199d\", \"tuplet6\": \"82ced293d6daf7469d83a0976b8037b9571c975975b3d95faeae918c07b809bd\"}"
+    }
+  }
+}

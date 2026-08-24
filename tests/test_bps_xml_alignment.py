@@ -1331,7 +1331,7 @@ def test_direct_notations_and_spans_receive_start_and_end_times():
     assert by_class["tie"]["end_meas"] == "2.500"
 
 
-def test_tuplet_requires_complete_note_ids_and_duration_times():
+def test_tuplet_ends_at_last_note_onset_and_requires_complete_note_ids():
     notes = [
         _timed_note(index, 10.0 + index * 0.25, pitch, midi, 0.2 + index * 0.1)
         for index, (pitch, midi) in enumerate(
@@ -1357,12 +1357,68 @@ def test_tuplet_requires_complete_note_ids_and_duration_times():
     complete = match_tuplets([box], notes, _one_system(), 1000, 500)[0]
     assert complete["status"] == "matched"
     assert complete["xml_time_confirmed"] == "true"
-    assert complete["end_meas"] == "10.750"
+    assert complete["end_meas"] == "10.500"
 
-    notes[1]["end_bps_time"] = None
+    notes[1]["note_id"] = None
     incomplete = match_tuplets([box], notes, _one_system(), 1000, 500)[0]
     assert incomplete["status"] == "review"
     assert incomplete["xml_time_confirmed"] == "false"
+
+
+def test_slur_connected_notes_include_both_complete_endpoint_chords():
+    notes = [
+        _timed_note(0, 1.0, "E5", 76, 0.20),
+        _timed_note(1, 1.0, "G5", 79, 0.20),
+        _timed_note(
+            2,
+            1.0,
+            "C5",
+            72,
+            0.20,
+            marks=[{"type": "start", "number": "1", "orientation": "over"}],
+        ),
+        _timed_note(
+            3,
+            2.0,
+            "D5",
+            74,
+            0.80,
+            marks=[{"type": "stop", "number": "1", "orientation": "over"}],
+        ),
+        _timed_note(4, 2.0, "F5", 77, 0.80),
+        _timed_note(5, 2.0, "A5", 81, 0.80),
+    ]
+    for note in notes[:3]:
+        note["xml_chord_sequence"] = 10
+    for note in notes[3:]:
+        note["xml_chord_sequence"] = 11
+    bps_notes = [
+        {
+            "note_id": note["note_id"],
+            "bps_time": note["bps_time"],
+            "end_time": note["bps_time"] + 0.25,
+            "midi": note["midi"],
+        }
+        for note in notes
+    ]
+    box = {
+        "txt_line": 1,
+        "class_id": 56,
+        "class": "slur",
+        "x": 0.50,
+        "y": 0.20,
+        "w": 0.48,
+        "h": 0.04,
+    }
+
+    row = match_xml_spans(
+        [box], notes, bps_notes, _one_system(), 1000, 500
+    )[0]
+
+    assert row["start_note"] == 2
+    assert row["end_note"] == 3
+    assert row["connected_note"] == "[0, 1, 2, 3, 4, 5]"
+    assert json.loads(row["pitches"]) == ["E5", "G5", "C5", "D5", "F5", "A5"]
 
 
 def test_tie_with_equally_good_xml_targets_stays_in_review():

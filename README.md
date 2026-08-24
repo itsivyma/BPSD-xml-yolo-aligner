@@ -382,7 +382,8 @@ Two fixed manifests deliberately cover different data profiles:
 - `regression/representative_pages.json` is the existing `Xia/` 113-class
   test/legacy suite and has the committed semantic baseline;
 - `regression/finished_xia_pages.json` is the production `finished/Xia/`
-  162-class suite. Create its baseline only after human review.
+  162-class suite and uses the human-accepted
+  `regression/finished_xia_baseline.json` baseline.
 
 Both select ten varied real pages covering fingerings, slurs, ties, tuplets,
 hairpins, ottava, pedal, wavy-line, repeat, cross-system, and cross-page cases.
@@ -404,6 +405,10 @@ bpsd-aligner regression-smoke \
   --baseline regression/representative_baseline.json \
   --resume
 ```
+
+For the production 162-class profile, replace those three regression paths
+with `finished_xia_pages.json`, `output/regression-finished-xia`, and
+`finished_xia_baseline.json`, respectively.
 
 To evaluate actual correctness rather than only stability, export reviewed
 decisions as normalized ground truth and add
