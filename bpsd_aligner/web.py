@@ -11,7 +11,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 import zipfile
 from contextlib import nullcontext
@@ -52,15 +51,14 @@ from bpsd_aligner.job_store import (
     write_review_state,
 )
 from bpsd_aligner.review_corrections import (
-    REVIEW_ACTIONS,
     apply_review_decisions,
-    build_editor_rows,
     build_review_checkpoint,
     build_review_queue,
     csv_bytes,
     load_review_checkpoint,
     render_review_endpoint_images,
     render_review_focus_images,
+    stratified_matched_sample,
 )
 from bpsd_aligner.review_dataset import REVIEW_SAMPLE_FIELDS, build_review_samples
 from bpsd_aligner.review_candidates import hydrate_review_candidates
@@ -79,11 +77,8 @@ from bpsd_aligner.web_utils import (
     group_review_overlays,
     pair_page_uploads,
     read_csv_bytes,
-    sanitize_path_columns,
-    summarize_rows,
     upload_destination,
 )
-from combine_yolo_xml import combine_dataset
 from pipeline_checkpoint import atomic_write_csv, atomic_write_json
 
 
@@ -666,13 +661,6 @@ def _render_large_download(
         )
 
 
-def _summary_cards(summary: dict[str, object]) -> None:
-    first, second, third = st.columns(3)
-    first.metric("Rows", f"{summary['rows']:,}")
-    second.metric("Scores", summary["scores"])
-    third.metric("Statuses", len(summary["statuses"]))
-
-
 def _apply_and_store_review_outputs(
     job: dict, editor_records: list[dict], reviewer: str
 ) -> list[str]:
@@ -1035,8 +1023,13 @@ def _render_review_workspace(job: dict) -> None:
         )
     include_matched = queue_mode != "Needs review"
     machine_status = "matched" if queue_mode == "Matched spot check" else None
+    queue_source = (
+        stratified_matched_sample(detailed_rows)
+        if queue_mode == "Matched spot check"
+        else detailed_rows
+    )
     queue = build_review_queue(
-        detailed_rows,
+        queue_source,
         page_id=None if selected_page == "All pages" else selected_page,
         class_name=None if selected_class == "All classes" else selected_class,
         machine_status=machine_status,
@@ -1575,14 +1568,12 @@ def _render_review_workspace(job: dict) -> None:
                 with endpoint_left:
                     start_input = st.text_input(
                         "開始音符",
-                        value=_endpoint_note_input_value(current_start_candidate),
                         key=manual_start_key,
                         placeholder="例如：52, 下, E3, 2",
                     )
                 with endpoint_right:
                     end_input = st.text_input(
                         "結束音符",
-                        value=_endpoint_note_input_value(current_end_candidate),
                         key=manual_end_key,
                         placeholder="例如：53, 上, G4, 1",
                     )
@@ -1910,6 +1901,7 @@ def _render_completed_job(job: dict) -> None:
         )
         return
     report = job["report"]
+    st.subheader("3. Review alignment")
     if report["passed"]:
         st.success("Alignment and validation completed.")
     else:
@@ -1930,6 +1922,25 @@ def _render_completed_job(job: dict) -> None:
         )
     for warning in report["warnings"]:
         st.warning(warning)
+
+    st.subheader("4. Download final CSV")
+    corrected_csv = job.get("human_review_outputs", {}).get("corrected_csv")
+    st.download_button(
+        (
+            "Download reviewed final BPS-OMR CSV"
+            if corrected_csv is not None
+            else "Download final BPS-OMR CSV"
+        ),
+        corrected_csv if corrected_csv is not None else _asset_bytes(job["final_bps_csv"]),
+        "bps_omr_final.csv",
+        "text/csv",
+        type="primary",
+        use_container_width=True,
+    )
+    st.caption(
+        "每個 YOLO bounding box 一列；不確定或不存在的值維持空白。"
+        "完成下方人工 review 並套用後，這裡會改為修正版 CSV。"
+    )
 
     _render_review_workspace(job)
     _render_review_outputs(job)
@@ -2060,98 +2071,10 @@ def _render_completed_job(job: dict) -> None:
         else:
             st.success("No machine-generated rows are marked for review.")
 
-    with st.expander("Human review and corrections", expanded=False):
-        st.write(
-            "Confirm keeps the machine values. Correct applies your edited values and "
-            "sets human_corrected=1. Reject clears uncertain semantic fields. "
-            "Leave any unknown value blank."
-        )
-        reviewer = st.text_input(
-            "Reviewer",
-            value="User",
-            key="human_review_reviewer",
-        )
-        include_matched = st.checkbox(
-            "Include machine-matched rows for spot checking",
-            value=False,
-            key="human_review_include_matched",
-        )
-        editor_source = build_editor_rows(
-            job["detailed_rows"], include_matched=include_matched
-        )
-        if editor_source:
-            edited = st.data_editor(
-                editor_source,
-                key=f"human_review_editor_{int(include_matched)}",
-                hide_index=True,
-                use_container_width=True,
-                disabled=["page_id", "yolo_line", "class", "machine_status"],
-                column_config={
-                    "action": st.column_config.SelectboxColumn(
-                        "Action",
-                        options=list(REVIEW_ACTIONS),
-                        required=True,
-                    ),
-                    "page_id": "Page",
-                    "yolo_line": "YOLO line",
-                    "corrected_class": "Corrected class",
-                    "corrected_class_id": "Corrected class ID",
-                    "machine_status": "Machine status",
-                    "start_meas": "Start time",
-                    "end_meas": "End time",
-                    "start_note": "Start note ID",
-                    "end_note": "End note ID",
-                    "connected_note": "Connected note IDs",
-                    "staff": "Staff",
-                    "comment": "Comment",
-                },
-            )
-            if st.button(
-                "Apply reviewed decisions",
-                type="primary",
-                key="apply_human_review_decisions",
-                use_container_width=True,
-            ):
-                edited_records = (
-                    edited.to_dict("records")
-                    if hasattr(edited, "to_dict")
-                    else list(edited)
-                )
-                review_errors = _apply_and_store_review_outputs(
-                    job,
-                    edited_records,
-                    reviewer,
-                )
-                if review_errors:
-                    for error in review_errors:
-                        st.error(error)
-                else:
-                    st.success(
-                        f"Applied {job['human_review_outputs']['decisions']} "
-                        "reviewed decisions."
-                    )
-        else:
-            st.success("No rows are currently available for review.")
-
-    st.subheader("Final BPS-OMR CSV")
-    st.download_button(
-        "Download final CSV",
-        _asset_bytes(job["final_bps_csv"]),
-        "bps_omr_final.csv",
-        "text/csv",
-        use_container_width=True,
-    )
-    st.caption(
-        "每個 YOLO bounding box 一列。欄位依 BPS-OMR annotations："
-        "class_id、x、y、w、h、class、musical_time、start_meas、end_meas、"
-        "start_note、end_note、connected_note、stem_dir；另外只保留 "
-        "human_corrected 與 is_repeated_measure。不確定值留空。"
-    )
-
-    with st.expander("Optional diagnostics and recovery files", expanded=False):
+    with st.expander("Recovery files", expanded=False):
         st.caption(
-            "一般使用只需下載上方 final CSV。這裡的 ZIP 收納 XML、YOLO、"
-            "時間排序、驗證資料與 review images，供除錯或研究追溯。"
+            "一般使用只需下載上方 final CSV。Checkpoint ZIP 只供同一批輸入"
+            "中斷後續跑與搬移人工 review 狀態；不包含原始上傳檔。"
         )
         if job.get("job_checkpoint_zip"):
             _render_large_download(
@@ -2177,13 +2100,11 @@ _initialize_job_store()
 st.title("BPSD XML–YOLO Aligner")
 st.caption("Upload score pages and export a strict BPS-OMR bounding-box CSV")
 
-align_tab, inspect_tab, combine_tab, guide_tab = st.tabs(
-    ["Run alignment", "Inspect CSV", "Advanced combine", "CLI guide"]
-)
+align_tab = st.container()
 
 with align_tab:
     _render_background_job_status()
-    st.subheader("Upload one or more score pages")
+    st.subheader("1. Upload score files")
     st.write(
         "Upload matching image/TXT pairs. One repetition MusicXML, optional unfolded "
         "MusicXML, BPSD note annotation, and notes.json are shared by every page."
@@ -2274,14 +2195,7 @@ with align_tab:
             "Turn this off to assign consecutive pages starting from First MusicXML page."
         ),
     )
-    run_in_background = st.checkbox(
-        "Run alignment in a background worker",
-        value=True,
-        help=(
-            "Recommended for multi-page scores. The job continues if this browser "
-            "tab closes; return and refresh the saved job status to load outputs."
-        ),
-    )
+    run_in_background = True
 
     page_pairs = []
     pairing_error = ""
@@ -2360,7 +2274,7 @@ with align_tab:
 
     required_common = [xml_upload, bps_upload, notes_upload]
     start = st.button(
-        "Align all uploaded pages",
+        "2. Align all uploaded pages",
         type="primary",
         disabled=not page_pairs or bool(pairing_error) or not all(required_common),
         use_container_width=True,
@@ -2445,8 +2359,8 @@ with align_tab:
                         "job_dir": str(background_dir),
                     }
                     st.success(
-                        "Background job started. Progress appears at the top of "
-                        "this tab and refreshes automatically every 2 seconds."
+                        "Alignment job started. Progress appears above and refreshes "
+                        "automatically every 2 seconds."
                     )
             else:
                 with st.status("Running alignment", expanded=True) as status:
@@ -2915,99 +2829,3 @@ with align_tab:
                             release_job_lease(lease_path)
     if "raw_alignment_job" in st.session_state:
         _render_completed_job(st.session_state["raw_alignment_job"])
-
-with inspect_tab:
-    st.subheader("Inspect an existing combined CSV")
-    uploaded_csv = st.file_uploader("Combined master CSV", type=["csv"], key="inspect_csv")
-    if _valid_upload(uploaded_csv, "CSV"):
-        try:
-            fields, rows = read_csv_bytes(uploaded_csv.getvalue())
-        except (UnicodeDecodeError, csv.Error) as error:
-            st.error(f"Unable to read CSV: {error}")
-        else:
-            summary = summarize_rows(rows)
-            _summary_cards(summary)
-            st.write("Row origins", summary["origins"])
-            st.write("Alignment statuses", summary["statuses"])
-            st.dataframe(rows[:200], use_container_width=True)
-            st.caption(f"Showing the first {min(200, len(rows)):,} rows and {len(fields):,} columns.")
-
-with combine_tab:
-    st.subheader("Combine existing stage outputs")
-    yolo_master = st.file_uploader("YOLO/BPS master CSV", type=["csv"], key="advanced_yolo")
-    xml_events = st.file_uploader("XML events CSV", type=["csv"], key="advanced_xml")
-    remove_paths = st.checkbox("Replace local source paths with filenames", value=True)
-    if st.button(
-        "Combine prepared CSV files",
-        disabled=not (yolo_master and xml_events),
-        key="advanced_combine_button",
-    ):
-        if _valid_upload(yolo_master, "YOLO master") and _valid_upload(
-            xml_events, "XML events"
-        ):
-            with st.status("Combining prepared CSV files", expanded=True) as status:
-                with tempfile.TemporaryDirectory(prefix="bpsd-web-combine-") as temporary:
-                    temporary_path = Path(temporary)
-                    yolo_path = _save_upload(yolo_master, temporary_path, "yolo_master.csv")
-                    xml_path = _save_upload(xml_events, temporary_path, "xml_events.csv")
-                    output_path = temporary_path / "output"
-                    try:
-                        report = combine_dataset(yolo_path, xml_path, output_path)
-                    except Exception as error:
-                        status.update(label="Combination failed", state="error")
-                        st.error(f"{type(error).__name__}: {error}")
-                    else:
-                        combined = (output_path / "combined_master.csv").read_bytes()
-                        if remove_paths:
-                            combined = sanitize_path_columns(combined)
-                        st.session_state["advanced_combined"] = {
-                            "report": report,
-                            "csv": combined,
-                            "links": (output_path / "alignment_links.csv").read_bytes(),
-                            "validation": json.dumps(
-                                report, ensure_ascii=False, indent=2
-                            ).encode("utf-8"),
-                        }
-                        status.update(
-                            label="Combination completed",
-                            state="complete" if report["passed"] else "error",
-                        )
-    if "advanced_combined" in st.session_state:
-        advanced = st.session_state["advanced_combined"]
-        if advanced["report"]["passed"]:
-            st.success("Prepared CSV files combined successfully.")
-        else:
-            st.error("Combination validation found errors.")
-        downloads = st.columns(3)
-        downloads[0].download_button(
-            "Download combined master",
-            advanced["csv"],
-            "combined_master.csv",
-            "text/csv",
-        )
-        downloads[1].download_button(
-            "Download alignment links",
-            advanced["links"],
-            "alignment_links.csv",
-            "text/csv",
-        )
-        downloads[2].download_button(
-            "Download validation JSON",
-            advanced["validation"],
-            "validation_report.json",
-            "application/json",
-        )
-
-with guide_tab:
-    st.subheader("Run the same pipeline in a terminal")
-    st.code(
-        """bpsd-aligner align --help
-bpsd-aligner dry-run --help
-bpsd-aligner xml-export --help
-bpsd-aligner combine --help""",
-        language="bash",
-    )
-    st.info(
-        "The BPSD note annotation CSV is required for official note IDs and timeline fields. "
-        "Repeat order comes from repetition MusicXML; unfolded MusicXML is optional validation."
-    )
