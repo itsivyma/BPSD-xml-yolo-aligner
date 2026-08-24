@@ -23,6 +23,7 @@ PACKAGE_ALIGNMENT_MODULES = (
     "musicxml.py",
     "pdf_utils.py",
     "review_candidates.py",
+    "span_semantics.py",
     "thresholds.py",
     "web_pipeline.py",
 )

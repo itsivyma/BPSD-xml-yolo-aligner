@@ -19,6 +19,22 @@ from bpsd_aligner.musicxml import (
 )
 
 
+UNSAFE_REPEAT_MAPPING_STATUSES = frozenset(
+    {"structural_unfolded_disagreement", "unsupported_navigation"}
+)
+
+
+def repeat_mapping_is_safe(status: object) -> bool:
+    """Return whether repeat-derived timing may be auto-accepted."""
+
+    statuses = {
+        item.strip()
+        for item in str(status or "").split("+")
+        if item.strip()
+    }
+    return not bool(statuses & UNSAFE_REPEAT_MAPPING_STATUSES)
+
+
 def _local(tag: str) -> str:
     return _shared_local_name(tag)
 
@@ -441,6 +457,9 @@ def build_repeat_mapping(
             )
 
     validation_mismatches = set(validation["mismatch_indices"])
+    has_unsupported_navigation = any(
+        item["navigation"] for item in metadata
+    )
     rows = []
     for unfolded_index, written_zero_index in enumerate(mapping, start=1):
         occurrences = by_written[written_zero_index]
@@ -480,9 +499,19 @@ def build_repeat_mapping(
                 "volta_numbers": json.dumps(item["volta_numbers"]),
                 "repeat_source": "repetition_musicxml",
                 "mapping_status": (
-                    "structural_unfolded_disagreement"
-                    if unfolded_index in validation_mismatches
-                    else "parsed_repeat_structure"
+                    "+".join(
+                        status
+                        for status in (
+                            "structural_unfolded_disagreement"
+                            if unfolded_index in validation_mismatches
+                            else "",
+                            "unsupported_navigation"
+                            if has_unsupported_navigation
+                            else "",
+                        )
+                        if status
+                    )
+                    or "parsed_repeat_structure"
                 ),
             }
         )

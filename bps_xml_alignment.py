@@ -54,6 +54,7 @@ from bpsd_aligner.overlay import (
 )
 from bpsd_aligner.span_semantics import endpoint_note_ids, index_chord_members
 from bpsd_aligner.thresholds import auto_accept_threshold
+from repeat_mapping import repeat_mapping_is_safe
 
 
 DYNAMIC_CLASS_BY_GLYPH = {
@@ -2038,8 +2039,6 @@ def _repeat_mapping_status(occurrences: list[dict]) -> str:
         for item in occurrences
         if str(item.get("mapping_status", "")).strip()
     }
-    if "structural_unfolded_disagreement" in statuses:
-        return "structural_unfolded_disagreement"
     return "+".join(sorted(statuses))
 
 
@@ -2058,11 +2057,9 @@ def finalize_match_diagnostics(rows: list[dict]) -> None:
                 row["repeat_mapping_status"] = _repeat_mapping_status(
                     [item for item in occurrences if isinstance(item, dict)]
                 )
-        if (
-            row.get("repeat_mapping_status")
-            == "structural_unfolded_disagreement"
-            and row.get("status") in {"matched", "inferred"}
-        ):
+        if not repeat_mapping_is_safe(row.get("repeat_mapping_status")) and row.get(
+            "status"
+        ) in {"matched", "inferred"}:
             row["status"] = "review"
             row["xml_time_confirmed"] = "false"
 
@@ -2141,7 +2138,7 @@ def match_dynamics(
             match_score = 0.75 * geometry_score + 0.25 * count_agreement
             occurrences = event.get("repeat_occurrences", [])
             repeat_mapping_status = _repeat_mapping_status(occurrences)
-            repeat_safe = repeat_mapping_status != "structural_unfolded_disagreement"
+            repeat_safe = repeat_mapping_is_safe(repeat_mapping_status)
             row = _base_output_row(box, key[0])
             row.update(
                 {
@@ -2586,7 +2583,7 @@ def _row_from_anchors(
         else _span_occurrences(start, end)
     )
     repeat_mapping_status = _repeat_mapping_status(occurrences)
-    repeat_safe = repeat_mapping_status != "structural_unfolded_disagreement"
+    repeat_safe = repeat_mapping_is_safe(repeat_mapping_status)
     if status == "matched" and not repeat_safe:
         status = "review"
     row = _base_output_row(box, int(start_event["system"]))

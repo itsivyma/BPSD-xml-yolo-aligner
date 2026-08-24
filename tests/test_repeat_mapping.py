@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from repeat_mapping import align_fingerprints, build_repeat_mapping
+from repeat_mapping import (
+    align_fingerprints,
+    build_repeat_mapping,
+    repeat_mapping_is_safe,
+)
 
 
 def test_align_fingerprints_maps_inserted_repeat_occurrence() -> None:
@@ -167,3 +171,8 @@ def test_navigation_markers_are_reported_without_guessing_performance_order(
         marker in warning
         for marker in ("dacapo", "dalsegno", "tocoda", "fine", "segno", "coda")
     )
+    assert all(
+        row["mapping_status"] == "unsupported_navigation"
+        for row in report["rows"]
+    )
+    assert repeat_mapping_is_safe("unsupported_navigation") is False

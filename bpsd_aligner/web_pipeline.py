@@ -1148,7 +1148,20 @@ def finalize_uploaded_batch(
             start = float("inf")
         return start, page, row_index
 
-    final_rows = [entry[2] for entry in sorted(final_entries, key=entry_sort_key)]
+    machine_sort_keys = {
+        (page, row_index): entry_sort_key((page, row_index, row))
+        for page, row_index, row in yolo_entries
+    }
+
+    def final_entry_sort_key(entry: tuple[int, int, dict]) -> tuple[float, int, int]:
+        own_key = entry_sort_key(entry)
+        if own_key[0] != float("inf"):
+            return own_key
+        return machine_sort_keys.get((entry[0], entry[1]), own_key)
+
+    final_rows = [
+        entry[2] for entry in sorted(final_entries, key=final_entry_sort_key)
+    ]
     yolo_rows = [entry[2] for entry in sorted(yolo_entries, key=entry_sort_key)]
     final_path = output_dir / "bps_omr_final.csv"
     detailed_path = output_dir / "page_alignment_detailed.csv"
@@ -1365,8 +1378,9 @@ def run_uploaded_alignment(
         or row.get("end_meas") in {"", "NA", None}
     ]
     if missing_time_lines:
-        errors.append(
-            "YOLO rows without start/end time: " + ", ".join(missing_time_lines)
+        warnings.append(
+            "YOLO rows intentionally retain blank start/end time until confirmed: "
+            + ", ".join(str(line) for line in missing_time_lines)
         )
     master_rows = _canonical_master_rows(
         detailed_rows,
