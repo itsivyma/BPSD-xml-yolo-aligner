@@ -52,6 +52,7 @@ BPSD note CSV ──────── official time and note IDs ────�
 | `combine_yolo_xml.py` | Lossless XML + YOLO research tables |
 | `bpsd_aligner/web_pipeline.py` | Shared-score preprocessing and multi-page orchestration |
 | `bpsd_aligner/web.py` | Streamlit presentation and Review controller; no direct matcher import |
+| `bpsd_aligner/web_worker.py` | Sole website alignment execution path with page checkpoints |
 | `bpsd_aligner/job_store.py` | Atomic jobs, progress, ownership and checkpoints |
 | `bpsd_aligner/job_dispatcher.py` | Durable queue dispatcher; no process per waiting job |
 | `bpsd_aligner/provenance.py` | Shared source-code signature for cache invalidation |
@@ -69,6 +70,8 @@ BPSD note CSV ──────── official time and note IDs ────�
 ## Important invariants
 
 - Every YOLO input line keeps a stable page/line identity.
+- Website alignment always runs through the durable worker; there is no second
+  synchronous implementation to drift from checkpoint/resume behavior.
 - Website jobs persist only the XML events required for alignment; full node
   dumps are explicit research CLI outputs, not default website artifacts.
 - Strict final CSV follows BPS-OMR annotations and leaves unsupported values

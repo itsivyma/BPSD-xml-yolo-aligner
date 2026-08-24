@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import io
 import json
 import os
-import re
 import subprocess
 import sys
 import time
 import zipfile
-from contextlib import nullcontext
 from pathlib import Path
 
 import streamlit as st
@@ -22,31 +19,21 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 from bpsd_aligner.web_pipeline import (
     FINAL_BPS_FIELDS,
     PIPELINE_VERSION,
-    finalize_uploaded_batch,
-    prepare_score_sources,
-    run_uploaded_alignment,
     safe_identifier,
 )
-from bpsd_aligner.pdf_utils import pdf_page_count, render_pdf_page
 from bpsd_aligner.overlay import render_alignment_overlay
 from bpsd_aligner.provenance import alignment_runtime_identity, pipeline_code_signature
 from bpsd_aligner.job_store import (
-    acquire_job_lease,
-    build_job_checkpoint_archive,
     job_directory,
     load_review_state,
-    load_page_checkpoint,
     owner_id_for_subject,
     prune_job_store,
     request_job_cancellation,
-    release_job_lease,
-    restore_job_checkpoint_archive,
     validate_upload_batch,
     validate_storage_capacity,
     validate_page_count,
     write_job_manifest,
     write_job_status,
-    write_page_checkpoint,
     write_review_state,
 )
 from bpsd_aligner.review_corrections import (
@@ -83,7 +70,7 @@ from bpsd_aligner.web_security import (
     load_user_tokens,
     verify_access_token,
 )
-from pipeline_checkpoint import atomic_write_csv, atomic_write_json
+from pipeline_checkpoint import atomic_write_json
 
 
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
@@ -2174,7 +2161,6 @@ with align_tab:
             "Turn this off to assign consecutive pages starting from First MusicXML page."
         ),
     )
-    run_in_background = True
 
     page_pairs = []
     pairing_error = ""
@@ -2315,7 +2301,7 @@ with align_tab:
             cached = st.session_state.get("raw_alignment_job")
             if cached and cached.get("fingerprint") == fingerprint:
                 st.info("The inputs match the completed session checkpoint; reusing outputs.")
-            elif run_in_background:
+            else:
                 try:
                     background_dir = _queue_background_job(
                         fingerprint=fingerprint,
@@ -2341,470 +2327,5 @@ with align_tab:
                         "Alignment job started. Progress appears above and refreshes "
                         "automatically every 2 seconds."
                     )
-            else:
-                with st.status("Running alignment", expanded=True) as status:
-                    progress = st.progress(0, text="Preparing uploads")
-                    persistent_job_dir = job_directory(fingerprint)
-                    with nullcontext(persistent_job_dir) as temporary_path:
-                        lease_path = None
-                        try:
-                            lease_path = acquire_job_lease(temporary_path)
-                        except RuntimeError as error:
-                            status.update(label="Alignment is already busy", state="error")
-                            st.error(str(error))
-                            st.stop()
-                        if resume_job_upload is not None:
-                            try:
-                                restored_files = restore_job_checkpoint_archive(
-                                    resume_job_upload.getvalue(),
-                                    temporary_path,
-                                    expected_fingerprint=fingerprint,
-                                    expected_pipeline_version=PIPELINE_VERSION,
-                                    expected_code_signature=pipeline_code_signature(),
-                                    expected_owner_id=options["owner_id"],
-                                )
-                            except Exception:
-                                release_job_lease(lease_path)
-                                lease_path = None
-                                raise
-                            st.write(
-                                f"Restored {restored_files} checkpoint files for "
-                                f"job {fingerprint[:12]}."
-                            )
-                        try:
-                            input_dir = temporary_path / "inputs"
-                            output_dir = temporary_path / "outputs"
-                            input_dir.mkdir(parents=True, exist_ok=True)
-                            xml_path = _save_upload(
-                                xml_upload,
-                                input_dir,
-                                "score.xml",
-                                stored_name="repetition.xml",
-                            )
-                            bps_path = _save_upload(
-                                bps_upload,
-                                input_dir,
-                                "ann_score_note.csv",
-                                stored_name="bps_notes.csv",
-                            )
-                            notes_path = _save_upload(
-                                notes_upload,
-                                input_dir,
-                                "notes.json",
-                                stored_name="notes.json",
-                            )
-                            unfolded_path = (
-                                _save_upload(
-                                    unfolded_upload,
-                                    input_dir,
-                                    "score_unfolded.xml",
-                                    stored_name="unfolded.xml",
-                                )
-                                if unfolded_upload is not None
-                                else None
-                            )
-                            clean_pdf_path = (
-                                _save_upload(
-                                    clean_pdf_upload,
-                                    input_dir,
-                                    "clean_repetition.pdf",
-                                    stored_name="clean_repetition.pdf",
-                                )
-                                if clean_pdf_upload is not None
-                                else None
-                            )
-                            write_job_manifest(
-                                temporary_path,
-                                fingerprint=fingerprint,
-                                pipeline_version=PIPELINE_VERSION,
-                                code_signature=pipeline_code_signature(),
-                                owner_id=options["owner_id"],
-                                inputs=[
-                                    {
-                                        "name": Path(uploaded.name).name,
-                                        "size": int(uploaded.size),
-                                    }
-                                    for uploaded in all_uploads
-                                    if uploaded is not None
-                                ],
-                            )
-                            completed_page_count = 0
-                            write_job_status(
-                                temporary_path,
-                                state="running",
-                                stage="uploads_saved",
-                                total_pages=len(page_pairs),
-                                message="Uploaded inputs are saved and validated.",
-                            )
-                        except Exception:
-                            release_job_lease(lease_path)
-                            lease_path = None
-                            raise
-                        try:
-                            if clean_pdf_path is not None:
-                                clean_page_count = pdf_page_count(clean_pdf_path)
-                                requested_page = max(
-                                    pair["page_number"] for pair in page_pairs
-                                )
-                                if requested_page > clean_page_count:
-                                    raise ValueError(
-                                        f"Clean repetition PDF has {clean_page_count} "
-                                        f"pages, but page {requested_page} is required. "
-                                        "Check that the PDF and MusicXML are the same "
-                                        "repetition-layout score."
-                                    )
-                                st.write(
-                                    f"Clean repetition PDF: {clean_page_count} pages; "
-                                    "requested pages are in range."
-                                )
-                            write_job_status(
-                                temporary_path,
-                                state="running",
-                                stage="shared_score",
-                                total_pages=len(page_pairs),
-                                message="Preparing whole-score XML and repeat mapping.",
-                            )
-                            st.write("Shared score 0/2: preparing whole-score sources")
-                            prepared_score = prepare_score_sources(
-                                xml_path=xml_path,
-                                bps_notes_path=bps_path,
-                                output_dir=output_dir / "shared_score",
-                                score_id=score_id,
-                                unfolded_xml_path=unfolded_path,
-                                progress_callback=lambda step, total, message: st.write(
-                                    f"Shared score {step}/{total}: {message}"
-                                ),
-                                include_xml_nodes=False,
-                            )
-                            page_reports = []
-                            final_entries = []
-                            detailed_rows = []
-                            review_candidate_rows = []
-                            review_candidate_set_rows = []
-                            yolo_entries = []
-                            xml_event_rows = []
-                            overlays = {}
-                            page_images = {}
-                            total_steps = len(page_pairs) * 6
-                            page_checkpoints = st.session_state.setdefault(
-                                "raw_alignment_page_checkpoints", {}
-                            )
-                            for page_index, pair in enumerate(page_pairs):
-                                checkpoint_key = (
-                                    f"{fingerprint}:{pair['stem']}:{pair['page_number']}"
-                                )
-                                checkpoint = page_checkpoints.get(checkpoint_key)
-                                if checkpoint is None:
-                                    disk_checkpoint = load_page_checkpoint(
-                                        temporary_path,
-                                        fingerprint=fingerprint,
-                                        pipeline_version=PIPELINE_VERSION,
-                                        page_id=pair["stem"],
-                                        page_number=pair["page_number"],
-                                    )
-                                    if disk_checkpoint is not None:
-                                        stored_image = disk_checkpoint["page_image"]
-                                        checkpoint = _page_checkpoint_artifacts(
-                                            disk_checkpoint["report"],
-                                            page_id=pair["stem"],
-                                            page_number=pair["page_number"],
-                                            page_image=stored_image,
-                                        )
-                                        page_checkpoints[checkpoint_key] = checkpoint
-                                if checkpoint:
-                                    page_reports.append(checkpoint["report"])
-                                    for row_index, row in enumerate(
-                                        checkpoint["final_rows"]
-                                    ):
-                                        final_entries.append(
-                                            (pair["page_number"], row_index, row)
-                                        )
-                                    detailed_rows.extend(checkpoint["detailed_rows"])
-                                    review_candidate_rows.extend(
-                                        checkpoint.get("review_candidate_rows", [])
-                                    )
-                                    review_candidate_set_rows.extend(
-                                        checkpoint.get("review_candidate_set_rows", [])
-                                    )
-                                    for row_index, row in enumerate(
-                                        checkpoint.get("yolo_rows", [])
-                                    ):
-                                        yolo_entries.append(
-                                            (pair["page_number"], row_index, row)
-                                        )
-                                    if not xml_event_rows and checkpoint.get(
-                                        "xml_event_rows"
-                                    ):
-                                        xml_event_rows = checkpoint["xml_event_rows"]
-                                    overlays.update(checkpoint["overlays"])
-                                    if checkpoint.get("page_image"):
-                                        page_images[pair["stem"]] = checkpoint[
-                                            "page_image"
-                                        ]
-                                    completed_steps = (page_index + 1) * 6
-                                    progress.progress(
-                                        completed_steps / total_steps,
-                                        text=(
-                                            f"{completed_steps}/{total_steps} "
-                                            f"{pair['stem']}: resumed page checkpoint"
-                                        ),
-                                    )
-                                    st.write(
-                                        f"{completed_steps}/{total_steps} "
-                                        f"{pair['stem']}: resumed page checkpoint"
-                                    )
-                                    completed_page_count += 1
-                                    write_job_status(
-                                        temporary_path,
-                                        state="running",
-                                        stage="page_alignment",
-                                        completed_pages=completed_page_count,
-                                        total_pages=len(page_pairs),
-                                        message=(
-                                            f"Resumed page checkpoint: {pair['stem']}"
-                                        ),
-                                    )
-                                    continue
-                                page_input_dir = input_dir / "pages" / safe_identifier(
-                                    pair["stem"],
-                                    f"page-{page_index + 1:04d}",
-                                )
-                                page_input_dir.mkdir(parents=True, exist_ok=True)
-                                image_path = _save_upload(
-                                    pair["image"], page_input_dir, "page.png"
-                                )
-                                page_image = str(image_path)
-                                page_images[pair["stem"]] = page_image
-                                yolo_path = _save_upload(
-                                    pair["yolo"], page_input_dir, "page.txt"
-                                )
-                                clean_image_path = None
-                                if clean_pdf_path is not None:
-                                    clean_image_path = render_pdf_page(
-                                        clean_pdf_path,
-                                        pair["page_number"],
-                                        input_dir
-                                        / "clean_pages"
-                                        / f"page-{pair['page_number']:04d}.png",
-                                    )
-                                    st.write(
-                                        f"{pair['stem']}: rendered clean PDF page "
-                                        f"{pair['page_number']} (checkpoint saved)."
-                                    )
-
-                                def update_progress(
-                                    step: int,
-                                    _page_total: int,
-                                    message: str,
-                                    *,
-                                    page_index: int = page_index,
-                                    stem: str = pair["stem"],
-                                ) -> None:
-                                    overall_step = page_index * 6 + step
-                                    progress.progress(
-                                        overall_step / total_steps,
-                                        text=(
-                                            f"{overall_step}/{total_steps} "
-                                            f"{stem}: {message}"
-                                        ),
-                                    )
-                                    st.write(
-                                        f"{overall_step}/{total_steps} {stem}: {message}"
-                                    )
-
-                                page_report = run_uploaded_alignment(
-                                    image_path=image_path,
-                                    yolo_path=yolo_path,
-                                    xml_path=xml_path,
-                                    bps_notes_path=bps_path,
-                                    notes_json_path=notes_path,
-                                    unfolded_xml_path=unfolded_path,
-                                    clean_image_path=clean_image_path,
-                                    output_dir=output_dir / "pages" / pair["stem"],
-                                    page_number=pair["page_number"],
-                                    score_id=score_id,
-                                    infer_fingerings=infer_fingerings,
-                                    progress_callback=update_progress,
-                                    prepared_score=prepared_score,
-                                    build_complete_exports=False,
-                                    system_start_measures=pair.get(
-                                        "system_start_measures"
-                                    ),
-                                    page_end_measure=pair.get("page_end_measure"),
-                                    render_class_overlays=False,
-                                    render_auxiliary_overlays=False,
-                                )
-                                page_reports.append(page_report)
-                                page_outputs = {
-                                    name: Path(path)
-                                    for name, path in page_report["outputs"].items()
-                                }
-                                page_final_rows = []
-                                with page_outputs["final_bps_csv"].open(
-                                    newline="", encoding="utf-8-sig"
-                                ) as file:
-                                    for row_index, row in enumerate(csv.DictReader(file)):
-                                        page_final_rows.append(row)
-                                        final_entries.append(
-                                            (pair["page_number"], row_index, row)
-                                        )
-                                page_detailed = read_csv_bytes(
-                                    page_outputs["detailed_csv"].read_bytes()
-                                )[1]
-                                hydrate_review_candidates(
-                                    page_detailed,
-                                    page_outputs["review_note_candidates_csv"],
-                                    page_outputs["review_candidate_sets_csv"],
-                                )
-                                for row in page_detailed:
-                                    row["page_id"] = pair["stem"]
-                                    row["page_number"] = str(pair["page_number"])
-                                detailed_rows.extend(page_detailed)
-                                page_review_candidates = read_csv_bytes(
-                                    page_outputs["review_note_candidates_csv"].read_bytes()
-                                )[1]
-                                page_review_candidate_sets = read_csv_bytes(
-                                    page_outputs["review_candidate_sets_csv"].read_bytes()
-                                )[1]
-                                review_candidate_rows.extend(page_review_candidates)
-                                review_candidate_set_rows.extend(
-                                    page_review_candidate_sets
-                                )
-                                page_yolo_rows = read_csv_bytes(
-                                    page_outputs["yolo_aligned_csv"].read_bytes()
-                                )[1]
-                                for row_index, row in enumerate(page_yolo_rows):
-                                    yolo_entries.append(
-                                        (pair["page_number"], row_index, row)
-                                    )
-                                checkpoint_xml_events = []
-                                if not xml_event_rows:
-                                    checkpoint_xml_events = read_csv_bytes(
-                                        page_outputs["xml_events_csv"].read_bytes()
-                                    )[1]
-                                    xml_event_rows = checkpoint_xml_events
-                                page_overlays = {}
-                                for name, path in page_outputs.items():
-                                    if not name.endswith("overlay") or not path.is_file():
-                                        continue
-                                    key = (
-                                        f"class_{pair['stem']}__{name.removeprefix('class_')}"
-                                        if name.startswith("class_")
-                                        else f"{pair['stem']}__{name}"
-                                    )
-                                    page_overlays[key] = str(path)
-                                overlays.update(page_overlays)
-                                page_checkpoints[checkpoint_key] = {
-                                    "report": page_report,
-                                    "final_rows": page_final_rows,
-                                    "detailed_rows": page_detailed,
-                                    "review_candidate_rows": page_review_candidates,
-                                    "review_candidate_set_rows": page_review_candidate_sets,
-                                    "yolo_rows": page_yolo_rows,
-                                    "xml_event_rows": checkpoint_xml_events,
-                                    "overlays": page_overlays,
-                                    "page_image": page_image,
-                                }
-                                write_page_checkpoint(
-                                    temporary_path,
-                                    fingerprint=fingerprint,
-                                    pipeline_version=PIPELINE_VERSION,
-                                    page_id=pair["stem"],
-                                    page_number=pair["page_number"],
-                                    report=page_report,
-                                    page_image=image_path,
-                                )
-                                completed_page_count += 1
-                                write_job_status(
-                                    temporary_path,
-                                    state="running",
-                                    stage="page_alignment",
-                                    completed_pages=completed_page_count,
-                                    total_pages=len(page_pairs),
-                                    message=f"Completed page: {pair['stem']}",
-                                )
-
-                            finalized = finalize_uploaded_batch(
-                                score_id=score_id,
-                                pages=[pair["page_number"] for pair in page_pairs],
-                                page_reports=page_reports,
-                                final_entries=final_entries,
-                                yolo_entries=yolo_entries,
-                                detailed_rows=detailed_rows,
-                                xml_events=xml_event_rows,
-                                xml_nodes=[],
-                                output_dir=output_dir,
-                                overlays=overlays,
-                                review_candidate_rows=review_candidate_rows,
-                                review_candidate_set_rows=review_candidate_set_rows,
-                            )
-                            report = finalized["report"]
-                            final_path = finalized["final_path"]
-                            yolo_path = finalized["yolo_path"]
-                            report_path = finalized["report_path"]
-                            validation_json = report_path.read_bytes()
-                            write_job_status(
-                                temporary_path,
-                                state="completed",
-                                stage="outputs_ready",
-                                completed_pages=completed_page_count,
-                                total_pages=len(page_pairs),
-                                message=(
-                                    "Alignment outputs passed validation."
-                                    if report["passed"]
-                                    else "Outputs are ready with validation errors."
-                                ),
-                            )
-                            job_checkpoint_path = build_job_checkpoint_archive(
-                                temporary_path,
-                                temporary_path / "alignment_job_checkpoint.zip",
-                            )
-                            st.session_state["raw_alignment_job"] = {
-                                "fingerprint": fingerprint,
-                                "owner_id": options["owner_id"],
-                                "job_dir": str(temporary_path),
-                                "report": report,
-                                "final_bps_csv": str(final_path),
-                                "yolo_aligned_csv": str(yolo_path),
-                                "detailed_rows": detailed_rows,
-                                "validation_json": validation_json,
-                                "job_checkpoint_zip": str(job_checkpoint_path),
-                                "overlays": overlays,
-                                "page_images": page_images,
-                                "review_decisions": {},
-                                "bps_note_count": prepared_score.get(
-                                    "bps_note_count"
-                                ),
-                                "bps_note_ids": prepared_score.get("bps_note_ids"),
-                                "class_map": {
-                                    str(item["id"]): str(item["name"])
-                                    for item in json.loads(
-                                        notes_upload.getvalue()
-                                    ).get("categories", [])
-                                },
-                            }
-                        except Exception as error:
-                            write_job_status(
-                                temporary_path,
-                                state="failed",
-                                stage="failed",
-                                completed_pages=completed_page_count,
-                                total_pages=len(page_pairs),
-                                message="Alignment stopped before all outputs were ready.",
-                                error=f"{type(error).__name__}: {error}",
-                            )
-                            status.update(label="Alignment failed", state="error")
-                            st.error(f"{type(error).__name__}: {error}")
-                        else:
-                            status.update(
-                                label=(
-                                    "Alignment completed"
-                                    if report["passed"]
-                                    else "Alignment completed with validation errors"
-                                ),
-                                state="complete" if report["passed"] else "error",
-                            )
-                        finally:
-                            release_job_lease(lease_path)
     if "raw_alignment_job" in st.session_state:
         _render_completed_job(st.session_state["raw_alignment_job"])
