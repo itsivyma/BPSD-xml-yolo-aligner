@@ -14,6 +14,7 @@ from pathlib import Path
 from defusedxml.ElementTree import DefusedXMLParser
 
 from bpsd_aligner import __version__ as PIPELINE_VERSION
+from bpsd_aligner.schema import BPS_OMR_FIELDS
 from pipeline_checkpoint import (
     atomic_write_csv,
     atomic_write_json,
@@ -23,11 +24,7 @@ from pipeline_checkpoint import (
 )
 
 
-BPS_FIELDS = [
-    "class_id", "x", "y", "w", "h", "class", "musical_time",
-    "start_meas", "end_meas", "start_note", "end_note",
-    "connected_note", "stem_dir",
-]
+BPS_FIELDS = BPS_OMR_FIELDS
 NODE_FIELDS = [
     "score_id", "xml_node_id", "parent_node_id", "depth", "sibling_index",
     "xml_xpath", "tag", "namespace", "attributes_json", "text", "tail",

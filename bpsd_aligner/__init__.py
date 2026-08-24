@@ -2,6 +2,7 @@
 
 import csv
 import sys
+from importlib.metadata import PackageNotFoundError, version
 
 
 # Detailed alignment CSVs deliberately retain a JSON note index for direct
@@ -11,4 +12,7 @@ import sys
 CSV_FIELD_SIZE_LIMIT = 16 * 1024 * 1024
 csv.field_size_limit(min(sys.maxsize, CSV_FIELD_SIZE_LIMIT))
 
-__version__ = "0.6.0"
+try:
+    __version__ = version("bpsd-xml-yolo-aligner")
+except PackageNotFoundError:
+    __version__ = "0+unknown"

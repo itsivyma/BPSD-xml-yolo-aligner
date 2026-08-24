@@ -12,16 +12,16 @@ images + YOLO TXT + notes.json
                 ├── page/system geometry ──────────────┐
                 │                                      │
 repetition MusicXML ── written measures/XML events ────┤
-unfolded MusicXML ──── repeat-expanded order ──────────┤
+unfolded MusicXML ──── optional traversal validation ──┤
 BPSD note CSV ──────── official time and note IDs ─────┤
                                                        ▼
                                                 alignment engine
                                                        │
-                         ┌─────────────────────────────┼──────────────┐
-                         ▼                             ▼              ▼
-                   strict BPS-OMR CSV          diagnostic CSVs   review images
-                                                       │              │
-                                                       └── human review
+                         ┌─────────────────────────────┴──────────────┐
+                         ▼                                            ▼
+                   strict BPS-OMR CSV                           review images
+                                                                      │
+                                                               human review
                                                               │
                                                               ▼
                                                      corrected outputs
@@ -33,8 +33,8 @@ BPSD note CSV ──────── official time and note IDs ────�
   approximate geometry.
 - Repetition MusicXML describes the printed score: written measure number,
   page/system placement, staff, voice, pitch and notation relationships.
-- Unfolded MusicXML describes performance order after repeats. It supplements
-  rather than replaces repetition MusicXML.
+- The repeat traversal is derived from repetition MusicXML. Unfolded MusicXML
+  is optional validation evidence and never replaces the structural result.
 - BPSD note annotations are authoritative for official note IDs and the
   `start_meas`/`end_meas` timeline.
 - Human Review is authoritative when it explicitly confirms or corrects a row.
@@ -60,6 +60,8 @@ BPSD note CSV ──────── official time and note IDs ────�
 | `bpsd_aligner/review_workspace.py` | Pure note labels, typed input resolution and click snapping |
 | `bpsd_aligner/review_corrections.py` | Review validation and corrected output rebuilding |
 | `bpsd_aligner/class_registry.py` | Stable class family, timeline and threshold defaults |
+| `bpsd_aligner/schema.py` | Single source of truth for final BPS-OMR fields |
+| `bpsd_aligner/csv_io.py` | Shared bounded UTF-8 CSV readers |
 | `bpsd_aligner/bps_omr_schema.py` | Compatibility entry point for final CSV semantics |
 | `bpsd_aligner/thresholds.py` | Environment overrides over registry defaults |
 | `bpsd_aligner/regression_smoke.py` | Fixed real-page semantic regression |
@@ -67,7 +69,8 @@ BPSD note CSV ──────── official time and note IDs ────�
 ## Important invariants
 
 - Every YOLO input line keeps a stable page/line identity.
-- Source XML nodes and events are never discarded from diagnostic exports.
+- Website jobs persist only the XML events required for alignment; full node
+  dumps are explicit research CLI outputs, not default website artifacts.
 - Strict final CSV follows BPS-OMR annotations and leaves unsupported values
   blank; diagnostic evidence belongs in separate outputs.
 - Repeated written measures keep occurrence identity. A printed measure number
@@ -83,7 +86,7 @@ BPSD note CSV ──────── official time and note IDs ────�
 
 ```text
 uploaded → queued → shared preprocessing → page 1..N checkpoints
-         → complete exports → outputs_ready → Review/corrections
+         → compact outputs_ready → Review/corrections → final CSV
 ```
 
 The website worker writes structured status events. A browser restart does not

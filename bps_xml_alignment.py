@@ -53,6 +53,7 @@ from bpsd_aligner.overlay import (
     write_alignment_overlay,
 )
 from bpsd_aligner.span_semantics import endpoint_note_ids, index_chord_members
+from bpsd_aligner.schema import BPS_OMR_FIELDS
 from bpsd_aligner.thresholds import auto_accept_threshold
 from repeat_mapping import repeat_mapping_is_safe
 
@@ -101,21 +102,7 @@ TARGET_CLASSES = {
     **FINGERING_CLASSES,
 }
 
-OUTPUT_FIELDS = [
-    "class_id",
-    "x",
-    "y",
-    "w",
-    "h",
-    "class",
-    "musical_time",
-    "start_meas",
-    "end_meas",
-    "start_note",
-    "end_note",
-    "connected_note",
-    "stem_dir",
-]
+OUTPUT_FIELDS = BPS_OMR_FIELDS
 
 DETAILED_OUTPUT_FIELDS = [
     *OUTPUT_FIELDS,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import hmac
 import io
 import json
 import os
@@ -79,6 +78,11 @@ from bpsd_aligner.web_utils import (
     read_csv_bytes,
     upload_destination,
 )
+from bpsd_aligner.web_security import (
+    configuration_digest,
+    load_user_tokens,
+    verify_access_token,
+)
 from pipeline_checkpoint import atomic_write_csv, atomic_write_json
 
 
@@ -88,20 +92,7 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 def _configured_user_tokens() -> dict[str, str]:
     """Load optional per-user tokens for shared multi-user deployments."""
 
-    configured = os.environ.get("BPSD_ALIGNER_USERS_FILE", "").strip()
-    if not configured:
-        return {}
-    payload = json.loads(Path(configured).expanduser().read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or not payload:
-        raise ValueError("BPSD_ALIGNER_USERS_FILE must contain a non-empty JSON object")
-    users = {
-        str(username).strip(): str(token)
-        for username, token in payload.items()
-        if str(username).strip() and str(token)
-    }
-    if len(users) != len(payload):
-        raise ValueError("every configured user requires a non-empty username and token")
-    return users
+    return load_user_tokens(os.environ.get("BPSD_ALIGNER_USERS_FILE", ""))
 
 
 def _job_owner_id() -> str:
@@ -114,16 +105,6 @@ def _job_owner_id() -> str:
 @st.cache_resource
 def _login_failure_store() -> dict[str, list[float]]:
     return {}
-
-
-def _verify_access_token(supplied: str, configured: str) -> bool:
-    """Verify plaintext or ``sha256:<hex>`` deployment tokens."""
-
-    if configured.startswith("sha256:"):
-        expected = configured.removeprefix("sha256:").lower()
-        actual = hashlib.sha256(supplied.encode("utf-8")).hexdigest()
-        return len(expected) == 64 and hmac.compare_digest(actual, expected)
-    return bool(configured) and hmac.compare_digest(supplied, configured)
 
 
 def _require_access_token() -> None:
@@ -145,9 +126,7 @@ def _require_access_token() -> None:
     authenticated = st.session_state.get("bpsd_authenticated")
     subject = str(st.session_state.get("bpsd_authenticated_subject", ""))
     configured_for_subject = users.get(subject, "") if users else expected
-    config_digest = hashlib.sha256(
-        configured_for_subject.encode("utf-8")
-    ).hexdigest()
+    config_digest = configuration_digest(configured_for_subject)
     if (
         authenticated
         and configured_for_subject
@@ -187,12 +166,12 @@ def _require_access_token() -> None:
         submitted = st.form_submit_button("Open aligner", type="primary")
     if submitted:
         expected_for_user = users.get(username, "") if users else expected
-        if _verify_access_token(supplied, expected_for_user):
+        if verify_access_token(supplied, expected_for_user):
             st.session_state["bpsd_authenticated"] = True
             st.session_state["bpsd_authenticated_subject"] = username
-            st.session_state["bpsd_auth_config_digest"] = hashlib.sha256(
-                expected_for_user.encode("utf-8")
-            ).hexdigest()
+            st.session_state["bpsd_auth_config_digest"] = configuration_digest(
+                expected_for_user
+            )
             failures.pop(failure_key, None)
             st.rerun()
         recent_failures.append(now)
