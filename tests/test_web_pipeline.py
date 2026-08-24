@@ -139,6 +139,7 @@ def test_final_batch_uses_machine_time_only_as_hidden_sort_metadata(
         xml_nodes=[],
         output_dir=tmp_path / "output",
         overlays={},
+        build_diagnostics=True,
     )
 
     assert [row["class"] for row in result["final_rows"]] == [
@@ -393,6 +394,31 @@ def test_shared_score_checkpoint_is_bound_to_source_hashes(tmp_path):
 
     assert first["bps_notes_sha256"] != second["bps_notes_sha256"]
     assert second["bps_note_count"] == 2
+
+
+def test_shared_score_can_skip_large_xml_node_dump(tmp_path):
+    inputs = _write_uploads(tmp_path)
+    prepared = prepare_score_sources(
+        xml_path=inputs["xml_path"],
+        bps_notes_path=inputs["bps_notes_path"],
+        output_dir=tmp_path / "shared-without-nodes",
+        score_id="compact",
+        include_xml_nodes=False,
+    )
+
+    assert prepared["xml_nodes_csv"] == ""
+    assert prepared["includes_xml_nodes"] is False
+    assert Path(prepared["xml_events_csv"]).is_file()
+    assert not (tmp_path / "shared-without-nodes/xml/xml_nodes.csv").exists()
+
+    report = run_uploaded_alignment(
+        **inputs,
+        output_dir=tmp_path / "compact-page",
+        prepared_score=prepared,
+        build_complete_exports=False,
+        render_qa_images=False,
+    )
+    assert "xml_nodes_csv" not in report["outputs"]
 
 
 def test_background_worker_completes_and_resumes_page_checkpoint(tmp_path):

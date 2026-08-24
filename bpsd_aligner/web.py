@@ -24,7 +24,6 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 from bpsd_aligner.web_pipeline import (
     FINAL_BPS_FIELDS,
     PIPELINE_VERSION,
-    build_batch_information_outputs,
     finalize_uploaded_batch,
     prepare_score_sources,
     run_uploaded_alignment,
@@ -55,7 +54,6 @@ from bpsd_aligner.job_store import (
 from bpsd_aligner.review_corrections import (
     REVIEW_ACTIONS,
     apply_review_decisions,
-    apply_corrections_to_master_rows,
     build_editor_rows,
     build_review_checkpoint,
     build_review_queue,
@@ -447,19 +445,10 @@ def _load_background_result(job_dir: Path, fingerprint: str) -> dict:
     required_paths = [
         "final_bps_csv",
         "yolo_aligned_csv",
-        "xml_events_csv",
-        "xml_nodes_csv",
-        "yolo_xml_timeline_csv",
-        "all_information_csv",
-        "combined_master_csv",
-        "alignment_links_csv",
-        "xml_spans_csv",
-        "performance_expanded_timeline_csv",
         "detailed_csv",
         "review_note_candidates_csv",
         "review_candidate_sets_csv",
         "validation_json",
-        "output_zip",
         "job_checkpoint_zip",
     ]
     missing = [name for name in required_paths if not Path(result[name]).is_file()]
@@ -617,7 +606,6 @@ def _page_checkpoint_artifacts(
         "review_candidate_set_rows": review_candidate_set_rows,
         "yolo_rows": read_csv_bytes(outputs["yolo_aligned_csv"].read_bytes())[1],
         "xml_event_rows": read_csv_bytes(outputs["xml_events_csv"].read_bytes())[1],
-        "xml_node_rows": read_csv_bytes(outputs["xml_nodes_csv"].read_bytes())[1],
         "overlays": overlays,
         "page_image": page_image,
     }
@@ -738,10 +726,6 @@ def _apply_and_store_review_outputs(
     accuracy_bytes = json.dumps(
         accuracy, ensure_ascii=False, indent=2
     ).encode("utf-8")
-    master_fields, master_rows = read_csv_bytes(_asset_bytes(job["yolo_aligned_csv"]))
-    corrected_master = apply_corrections_to_master_rows(master_rows, corrections)
-    xml_event_fields, xml_events = read_csv_bytes(_asset_bytes(job["xml_events_csv"]))
-    xml_node_fields, xml_nodes = read_csv_bytes(_asset_bytes(job["xml_nodes_csv"]))
     corrected_images = {}
     correction_by_key = {
         f"{entry.get('page_id')}:Y{entry.get('yolo_line')}": entry
@@ -785,36 +769,18 @@ def _apply_and_store_review_outputs(
 
     training_csv = csv_bytes(training_rows, REVIEW_SAMPLE_FIELDS)
 
-    with tempfile.TemporaryDirectory(prefix="bpsd-corrected-") as temporary:
-        target_dir = Path(temporary)
-        atomic_write_csv(target_dir / "yolo_aligned_corrected.csv", master_fields, corrected_master)
-        atomic_write_csv(target_dir / "xml_events.csv", xml_event_fields, xml_events)
-        atomic_write_csv(target_dir / "xml_nodes.csv", xml_node_fields, xml_nodes)
-        rebuilt = build_batch_information_outputs(
-            yolo_rows=corrected_master,
-            xml_events=xml_events,
-            xml_nodes=xml_nodes,
-            output_dir=target_dir / "complete",
-        )
-        if not rebuilt["passed"]:
-            return list(rebuilt["validation_errors"])
-        corrected_csv = csv_bytes(corrected_rows, FINAL_BPS_FIELDS)
-        archive_path = target_dir / "bpsd_alignment_corrected_outputs.zip"
-        with zipfile.ZipFile(
-            archive_path, "w", compression=zipfile.ZIP_DEFLATED
-        ) as archive:
-            archive.writestr("bps_omr_final_corrected.csv", corrected_csv)
-            archive.writestr("human_corrections.json", corrections_bytes)
-            archive.writestr("accuracy_report.json", accuracy_bytes)
-            archive.writestr("review_training_rows.csv", training_csv)
-            for name, path in rebuilt["outputs"].items():
-                archive.write(path, arcname=f"corrected/{path.name}")
-            for name, data in corrected_images.items():
-                archive.writestr(f"corrected_review_images/{name}", data)
-        complete_outputs = {
-            name: path.read_bytes() for name, path in rebuilt["outputs"].items()
-        }
-        corrected_zip = archive_path.read_bytes()
+    corrected_csv = csv_bytes(corrected_rows, FINAL_BPS_FIELDS)
+    corrected_archive = io.BytesIO()
+    with zipfile.ZipFile(
+        corrected_archive, "w", compression=zipfile.ZIP_DEFLATED
+    ) as archive:
+        archive.writestr("bps_omr_final_corrected.csv", corrected_csv)
+        archive.writestr("human_corrections.json", corrections_bytes)
+        archive.writestr("accuracy_report.json", accuracy_bytes)
+        archive.writestr("review_training_rows.csv", training_csv)
+        for name, data in corrected_images.items():
+            archive.writestr(f"corrected_review_images/{name}", data)
+    corrected_zip = corrected_archive.getvalue()
     job["human_review_outputs"] = {
         "corrected_csv": corrected_csv,
         "corrections_json": corrections_bytes,
@@ -822,7 +788,6 @@ def _apply_and_store_review_outputs(
         "training_csv": training_csv,
         "accuracy": accuracy,
         "decisions": len(corrections["entries"]),
-        "complete_outputs": complete_outputs,
         "corrected_images": corrected_images,
         "corrected_zip": corrected_zip,
     }
@@ -1934,17 +1899,8 @@ def _render_completed_job(job: dict) -> None:
         "fingerprint",
         "final_bps_csv",
         "yolo_aligned_csv",
-        "xml_events_csv",
-        "xml_nodes_csv",
-        "yolo_xml_timeline_csv",
-        "all_information_csv",
-        "combined_master_csv",
-        "alignment_links_csv",
-        "xml_spans_csv",
-        "performance_expanded_timeline_csv",
         "detailed_rows",
         "validation_json",
-        "output_zip",
         "overlays",
     }
     if not required_job_fields.issubset(job):
@@ -2196,12 +2152,6 @@ def _render_completed_job(job: dict) -> None:
         st.caption(
             "一般使用只需下載上方 final CSV。這裡的 ZIP 收納 XML、YOLO、"
             "時間排序、驗證資料與 review images，供除錯或研究追溯。"
-        )
-        _render_large_download(
-            label="Diagnostics + review images ZIP",
-            value=job["output_zip"],
-            file_name="bpsd_alignment_diagnostics.zip",
-            key="final_outputs_zip",
         )
         if job.get("job_checkpoint_zip"):
             _render_large_download(
@@ -2631,6 +2581,7 @@ with align_tab:
                                 progress_callback=lambda step, total, message: st.write(
                                     f"Shared score {step}/{total}: {message}"
                                 ),
+                                include_xml_nodes=False,
                             )
                             page_reports = []
                             final_entries = []
@@ -2639,7 +2590,6 @@ with align_tab:
                             review_candidate_set_rows = []
                             yolo_entries = []
                             xml_event_rows = []
-                            xml_node_rows = []
                             overlays = {}
                             page_images = {}
                             total_steps = len(page_pairs) * 6
@@ -2693,10 +2643,6 @@ with align_tab:
                                         "xml_event_rows"
                                     ):
                                         xml_event_rows = checkpoint["xml_event_rows"]
-                                    if not xml_node_rows and checkpoint.get(
-                                        "xml_node_rows"
-                                    ):
-                                        xml_node_rows = checkpoint["xml_node_rows"]
                                     overlays.update(checkpoint["overlays"])
                                     if checkpoint.get("page_image"):
                                         page_images[pair["stem"]] = checkpoint[
@@ -2839,17 +2785,11 @@ with align_tab:
                                         (pair["page_number"], row_index, row)
                                     )
                                 checkpoint_xml_events = []
-                                checkpoint_xml_nodes = []
                                 if not xml_event_rows:
                                     checkpoint_xml_events = read_csv_bytes(
                                         page_outputs["xml_events_csv"].read_bytes()
                                     )[1]
                                     xml_event_rows = checkpoint_xml_events
-                                if not xml_node_rows:
-                                    checkpoint_xml_nodes = read_csv_bytes(
-                                        page_outputs["xml_nodes_csv"].read_bytes()
-                                    )[1]
-                                    xml_node_rows = checkpoint_xml_nodes
                                 page_overlays = {}
                                 for name, path in page_outputs.items():
                                     if not name.endswith("overlay") or not path.is_file():
@@ -2869,7 +2809,6 @@ with align_tab:
                                     "review_candidate_set_rows": page_review_candidate_sets,
                                     "yolo_rows": page_yolo_rows,
                                     "xml_event_rows": checkpoint_xml_events,
-                                    "xml_node_rows": checkpoint_xml_nodes,
                                     "overlays": page_overlays,
                                     "page_image": page_image,
                                 }
@@ -2900,7 +2839,7 @@ with align_tab:
                                 yolo_entries=yolo_entries,
                                 detailed_rows=detailed_rows,
                                 xml_events=xml_event_rows,
-                                xml_nodes=xml_node_rows,
+                                xml_nodes=[],
                                 output_dir=output_dir,
                                 overlays=overlays,
                                 review_candidate_rows=review_candidate_rows,
@@ -2908,9 +2847,8 @@ with align_tab:
                             )
                             report = finalized["report"]
                             final_path = finalized["final_path"]
-                            complete_exports = finalized["complete"]
+                            yolo_path = finalized["yolo_path"]
                             report_path = finalized["report_path"]
-                            zip_path = finalized["zip_path"]
                             validation_json = report_path.read_bytes()
                             write_job_status(
                                 temporary_path,
@@ -2934,13 +2872,9 @@ with align_tab:
                                 "job_dir": str(temporary_path),
                                 "report": report,
                                 "final_bps_csv": str(final_path),
-                                **{
-                                    name: str(path)
-                                    for name, path in complete_exports["outputs"].items()
-                                },
+                                "yolo_aligned_csv": str(yolo_path),
                                 "detailed_rows": detailed_rows,
                                 "validation_json": validation_json,
-                                "output_zip": str(zip_path),
                                 "job_checkpoint_zip": str(job_checkpoint_path),
                                 "overlays": overlays,
                                 "page_images": page_images,

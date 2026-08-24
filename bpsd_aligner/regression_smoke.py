@@ -438,6 +438,7 @@ def run_regression_smoke(
                     output_dir=output_dir / "shared" / score_id,
                     score_id=score_id,
                     resume=resume,
+                    include_xml_nodes=False,
                     progress_callback=lambda step, total, message, score=score_id: (
                         emit_progress(f"shared:{score}", step, total, message)
                     ),

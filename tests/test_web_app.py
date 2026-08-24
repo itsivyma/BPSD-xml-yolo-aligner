@@ -229,9 +229,8 @@ def test_completed_job_exposes_human_review_editor_and_apply_button():
         uploader.label == "Resume from review checkpoint"
         for uploader in result.file_uploader
     )
-    assert any(
-        checkbox.label == "Prepare Diagnostics + review images ZIP"
-        for checkbox in result.checkbox
+    assert not any(
+        "Diagnostics" in checkbox.label for checkbox in result.checkbox
     )
     assert not any(
         button.label in {
