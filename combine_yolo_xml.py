@@ -8,6 +8,7 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from bpsd_aligner import __version__ as PIPELINE_VERSION
 from pipeline_checkpoint import (
     atomic_write_csv,
     atomic_write_json,
@@ -18,7 +19,6 @@ from pipeline_checkpoint import (
 from xml_export import BPS_FIELDS, EVENT_FIELDS
 
 
-PIPELINE_VERSION = "0.3.0"
 LINK_FIELDS = [
     "link_id", "bbox_id", "xml_event_id", "xml_node_id", "score_id",
     "page_id", "yolo_line", "yolo_class", "xml_event_type",

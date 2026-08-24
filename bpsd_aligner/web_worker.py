@@ -78,6 +78,14 @@ def run_background_job(request_path: Path) -> Path:
     fingerprint = str(request["fingerprint"])
     if job_dir.name != fingerprint:
         raise ValueError("background job directory does not match its fingerprint")
+    manifest_path = job_dir / "job_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (
+        manifest.get("job_id") != fingerprint
+        or manifest.get("pipeline_version") != PIPELINE_VERSION
+        or manifest.get("owner_id", "") != request.get("owner_id", "")
+    ):
+        raise ValueError("background job manifest identity does not match its request")
 
     xml_path = _inside_job(job_dir, request["xml_path"])
     bps_path = _inside_job(job_dir, request["bps_notes_path"])
@@ -133,14 +141,30 @@ def run_background_job(request_path: Path) -> Path:
             state="running",
             stage="shared_score",
             total_pages=len(pages),
-            message="Preparing shared MusicXML and repeat mapping.",
+            message="Preparing shared MusicXML and structural repeat traversal.",
         )
+
+        def shared_progress(step: int, total: int, message: str) -> None:
+            if job_cancellation_requested(job_dir):
+                raise JobCancelled(
+                    "Cancellation was requested during shared-score preparation."
+                )
+            write_job_status(
+                job_dir,
+                state="running",
+                stage=f"shared_score:{step}/{total}",
+                completed_pages=0,
+                total_pages=len(pages),
+                message=message,
+            )
+
         prepared = prepare_score_sources(
             xml_path=xml_path,
             bps_notes_path=bps_path,
             output_dir=output_dir / "shared_score",
             score_id=request["score_id"],
             unfolded_xml_path=unfolded_path,
+            progress_callback=shared_progress,
         )
 
         page_reports = []
@@ -179,6 +203,21 @@ def run_background_job(request_path: Path) -> Path:
                         page_number,
                         job_dir / "inputs" / "clean_pages" / f"page-{page_number:04d}.png",
                     )
+
+                def page_progress(step: int, total: int, message: str) -> None:
+                    if job_cancellation_requested(job_dir):
+                        raise JobCancelled(
+                            f"Cancellation was requested while aligning page {page_id}."
+                        )
+                    write_job_status(
+                        job_dir,
+                        state="running",
+                        stage=f"page_alignment:{step}/{total}",
+                        completed_pages=page_index,
+                        total_pages=len(pages),
+                        message=f"{page_id}: {message}",
+                    )
+
                 report = run_uploaded_alignment(
                     image_path=image_path,
                     yolo_path=yolo_path,
@@ -195,6 +234,9 @@ def run_background_job(request_path: Path) -> Path:
                     build_complete_exports=False,
                     system_start_measures=page.get("system_start_measures") or None,
                     page_end_measure=page.get("page_end_measure"),
+                    progress_callback=page_progress,
+                    render_class_overlays=False,
+                    render_auxiliary_overlays=False,
                 )
                 write_page_checkpoint(
                     job_dir,
@@ -323,6 +365,7 @@ def run_background_job(request_path: Path) -> Path:
         result = {
             "schema_version": "1.0",
             "fingerprint": fingerprint,
+            "owner_id": request.get("owner_id", ""),
             "report": report,
             "final_bps_csv": str(final_path),
             **{name: str(path) for name, path in complete["outputs"].items()},

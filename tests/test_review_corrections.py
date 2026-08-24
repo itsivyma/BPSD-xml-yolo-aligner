@@ -11,6 +11,7 @@ from bpsd_aligner.review_corrections import (
     evaluate_ground_truth_rows,
     load_review_checkpoint,
     normalize_legacy_review_rows,
+    render_review_endpoint_images,
     render_review_focus_images,
 )
 
@@ -297,6 +298,27 @@ def test_render_review_focus_images_keeps_native_pixels_and_highlights_bbox():
     assert geometry["page_height"] == 800
     assert geometry["width"] < geometry["page_width"]
     assert geometry["height"] < geometry["page_height"]
+
+
+def test_render_cross_page_endpoint_uses_notehead_without_false_bbox():
+    source = Image.new("RGB", (1000, 800), "white")
+    data = io.BytesIO()
+    source.save(data, format="PNG")
+    candidate = {"x_px": 600, "y_px": 400, "note_id": 9}
+
+    full_data, crop_data, geometry = render_review_endpoint_images(
+        data.getvalue(), candidate, [candidate], role="end"
+    )
+
+    with Image.open(io.BytesIO(full_data)) as full:
+        assert full.size == (1000, 800)
+        endpoint_pixel = full.getpixel((600, 386))
+        assert endpoint_pixel[0] > 80
+        assert endpoint_pixel[2] > 80
+    with Image.open(io.BytesIO(crop_data)) as crop:
+        assert crop.width < 1000
+        assert crop.height < 800
+    assert geometry["left"] < 600 < geometry["left"] + geometry["width"]
 
 
 def test_workspace_special_decisions_change_corrected_output_conservatively():

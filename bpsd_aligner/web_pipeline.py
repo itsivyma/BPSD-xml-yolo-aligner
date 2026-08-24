@@ -13,6 +13,8 @@ from typing import Callable
 
 from PIL import Image
 
+from bpsd_aligner import __version__ as PIPELINE_VERSION
+from bpsd_aligner.bps_omr_schema import musical_time_for_class
 from bps_xml_alignment import (
     load_bps_notes,
     load_categories,
@@ -27,10 +29,13 @@ from repeat_mapping import build_repeat_mapping, write_repeat_mapping
 from xml_export import BPS_FIELDS, EVENT_FIELDS, NODE_FIELDS, export_score
 
 
-PIPELINE_VERSION = "0.3.2"
 MAX_DECODED_IMAGE_PIXELS = 100_000_000
 ProgressCallback = Callable[[int, int, str], None]
-FINAL_BPS_FIELDS = [*OFFICIAL_FIELDS, "human_corrected"]
+FINAL_BPS_FIELDS = [
+    *OFFICIAL_FIELDS,
+    "human_corrected",
+    "is_repeated_measure",
+]
 FINAL_UNCERTAIN_FIELDS = [
     "start_meas",
     "end_meas",
@@ -70,6 +75,13 @@ PERFORMANCE_FIELDS = [
     "occurrence",
     "occurrence_count",
     "repeat_group_id",
+    "written_measure",
+    "performance_measure",
+    "is_repeated_measure",
+    "repeat_status",
+    "volta_numbers",
+    "repeat_source",
+    "repeat_mapping_status",
     "start_meas",
     "end_meas",
     "start_note",
@@ -139,7 +151,13 @@ def build_final_bps_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             str(source.get("human_approved", "")).strip().lower() == "true"
             or source.get("match_source") == "human_review"
         )
-        confirmed = source.get("alignment_status") == "matched" or corrected
+        human_confirmed = source.get("match_source") == "human_confirmation"
+        xml_time_confirmed = (
+            str(source.get("xml_time_confirmed", "")).strip().lower() == "true"
+        )
+        confirmed = corrected or human_confirmed or (
+            source.get("alignment_status") == "matched" and xml_time_confirmed
+        )
         row = {
             field: "" if str(source.get(field, "")).strip().upper() == "NA"
             else str(source.get(field, ""))
@@ -148,11 +166,134 @@ def build_final_bps_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
         if not confirmed:
             for field in FINAL_UNCERTAIN_FIELDS:
                 row[field] = ""
-        if row.get("class") != "stem":
+        if not str(row.get("class", "")).startswith("stem"):
             row["stem_dir"] = ""
         row["human_corrected"] = "1" if corrected else "0"
+        repeated = str(source.get("is_repeated_measure", "")).strip().lower()
+        if repeated not in {"1", "true", "yes"}:
+            try:
+                repeated = (
+                    "1"
+                    if int(str(source.get("repeat_occurrence_count", "1") or "1")) > 1
+                    else "0"
+                )
+            except ValueError:
+                repeated = "0"
+        else:
+            repeated = "1"
+        row["is_repeated_measure"] = repeated
         output.append({field: row.get(field, "") for field in FINAL_BPS_FIELDS})
     return output
+
+
+def validate_final_bps_rows(
+    rows: list[dict[str, str]],
+    *,
+    expected_count: int | None = None,
+) -> list[str]:
+    """Validate final rows against the BPS-OMR bounding-box field semantics."""
+
+    errors: list[str] = []
+    if expected_count is not None and len(rows) != expected_count:
+        errors.append(
+            f"Final CSV row count {len(rows)} does not match YOLO count "
+            f"{expected_count}"
+        )
+
+    def integer(value: object) -> bool:
+        return str(value).strip().isdigit()
+
+    for index, row in enumerate(rows, start=1):
+        label = f"final row {index}"
+        try:
+            int(str(row.get("class_id", "")))
+        except ValueError:
+            errors.append(f"{label}: class_id must be an integer")
+        if not str(row.get("class", "")).strip():
+            errors.append(f"{label}: class must not be blank")
+
+        for field in ("x", "y", "w", "h"):
+            try:
+                value = float(str(row.get(field, "")))
+            except ValueError:
+                errors.append(f"{label}: {field} must be numeric")
+                continue
+            if not 0 <= value <= 1:
+                errors.append(f"{label}: {field} must be between 0 and 1")
+            if field in {"w", "h"} and value <= 0:
+                errors.append(f"{label}: {field} must be greater than 0")
+
+        timeline = str(row.get("musical_time", "")).strip()
+        if timeline not in {"", "0", "1"}:
+            errors.append(f"{label}: musical_time must be 0, 1, or blank")
+        expected_timeline = musical_time_for_class(row.get("class"))
+        if expected_timeline is not None and timeline != str(expected_timeline):
+            errors.append(
+                f"{label}: musical_time for {row.get('class')} must be "
+                f"{expected_timeline}"
+            )
+
+        start_text = str(row.get("start_meas", "")).strip()
+        end_text = str(row.get("end_meas", "")).strip()
+        if bool(start_text) != bool(end_text):
+            errors.append(f"{label}: start_meas and end_meas must both be set or blank")
+        elif start_text:
+            try:
+                start_time = float(start_text)
+                end_time = float(end_text)
+                if start_time > end_time:
+                    errors.append(f"{label}: start_meas must not exceed end_meas")
+            except ValueError:
+                errors.append(f"{label}: start_meas and end_meas must be numeric")
+
+        start_note = str(row.get("start_note", "")).strip()
+        end_note = str(row.get("end_note", "")).strip()
+        if bool(start_note) != bool(end_note):
+            errors.append(f"{label}: start_note and end_note must both be set or blank")
+        for field, value in (("start_note", start_note), ("end_note", end_note)):
+            if value and not integer(value):
+                errors.append(f"{label}: {field} must be an integer or blank")
+
+        connected_text = str(row.get("connected_note", "")).strip()
+        connected: list[str] = []
+        if connected_text:
+            try:
+                decoded = json.loads(connected_text)
+            except json.JSONDecodeError:
+                errors.append(f"{label}: connected_note must be a JSON list or blank")
+                decoded = []
+            if not isinstance(decoded, list):
+                errors.append(f"{label}: connected_note must be a JSON list or blank")
+            else:
+                connected = [str(value) for value in decoded]
+                if any(not integer(value) for value in connected):
+                    errors.append(
+                        f"{label}: connected_note must contain only integer note IDs"
+                    )
+        if connected and not (start_note and end_note):
+            errors.append(
+                f"{label}: connected_note requires start_note and end_note"
+            )
+        if start_note and connected:
+            if start_note not in connected or end_note not in connected:
+                errors.append(
+                    f"{label}: start_note and end_note must appear in connected_note"
+                )
+            if start_note == end_note and connected != [start_note]:
+                errors.append(
+                    f"{label}: equal start/end notes require one connected_note"
+                )
+
+        stem_dir = str(row.get("stem_dir", "")).strip()
+        is_stem = str(row.get("class", "")).startswith("stem")
+        if stem_dir and (not is_stem or stem_dir not in {"0", "1"}):
+            errors.append(
+                f"{label}: stem_dir must be blank except 0/1 on stem classes"
+            )
+        for field in ("human_corrected", "is_repeated_measure"):
+            if str(row.get(field, "")).strip() not in {"0", "1"}:
+                errors.append(f"{label}: {field} must be 0 or 1")
+    return errors
 
 
 def _report_progress(
@@ -296,8 +437,14 @@ def _span_marker(event: dict) -> tuple[str, str, str] | None:
         attributes = {}
     marker_type = str(attributes.get("type", "")).lower()
     number = str(attributes.get("number", "1"))
-    if subtype in {"slur", "tie", "tied"}:
-        kind = "tie" if subtype in {"tie", "tied"} else "slur"
+    if subtype in {"slur", "tie", "tied", "wavy-line"}:
+        kind = (
+            "tie"
+            if subtype in {"tie", "tied"}
+            else "wavy-line"
+            if subtype == "wavy-line"
+            else "slur"
+        )
         if marker_type in {"start", "stop", "continue"}:
             return kind, marker_type, number
     if event.get("event_type") == "direction" and subtype in {
@@ -354,7 +501,7 @@ def build_xml_spans(events: list[dict], destination: Path) -> list[dict]:
                     ),
                 )
             )
-        elif kind == "slur":
+        elif kind in {"slur", "wavy-line"}:
             pairing_scope = str(event.get("voice", ""))
         else:
             pairing_scope = str(event.get("staff", ""))
@@ -394,7 +541,10 @@ def build_xml_spans(events: list[dict], destination: Path) -> list[dict]:
         end_anchor = anchor(event)
         start_note = start_anchor.get("start_note", "")
         end_note = end_anchor.get("end_note", "")
-        connected = [value for value in (start_note, end_note) if str(value) != ""]
+        connected = []
+        for value in (start_note, end_note):
+            if str(value) != "" and value not in connected:
+                connected.append(value)
         rows.append(
             {
                 "span_id": f"{start.get('score_id', '')}:SPAN{len(rows) + 1:07d}",
@@ -490,6 +640,31 @@ def build_performance_expanded_timeline(
                         ),
                         "repeat_group_id": occurrence.get(
                             "repeat_group_id", source.get("repeat_group_id", "")
+                        ),
+                        "written_measure": occurrence.get(
+                            "written_measure",
+                            source.get("written_measure", source.get("xml_measure", "")),
+                        ),
+                        "performance_measure": occurrence.get(
+                            "performance_measure",
+                            occurrence.get("unfolded_measure_index", ""),
+                        ),
+                        "is_repeated_measure": occurrence.get(
+                            "is_repeated_measure",
+                            source.get("is_repeated_measure", ""),
+                        ),
+                        "repeat_status": occurrence.get(
+                            "repeat_status", source.get("repeat_status", "none")
+                        ),
+                        "volta_numbers": occurrence.get(
+                            "volta_numbers", source.get("volta_numbers", "[]")
+                        ),
+                        "repeat_source": occurrence.get(
+                            "repeat_source", source.get("repeat_source", "")
+                        ),
+                        "repeat_mapping_status": occurrence.get(
+                            "mapping_status",
+                            source.get("repeat_mapping_status", ""),
                         ),
                         "start_meas": occurrence.get(
                             "start_meas",
@@ -630,6 +805,7 @@ def prepare_score_sources(
                     "repeat_json",
                     "xml_nodes_csv",
                     "xml_events_csv",
+                    "xml_spans_csv",
                 )
             ]
         except (OSError, KeyError, TypeError, json.JSONDecodeError):
@@ -650,12 +826,12 @@ def prepare_score_sources(
                 "repeat_json": saved_paths[1],
                 "xml_nodes_csv": saved_paths[2],
                 "xml_events_csv": saved_paths[3],
+                "xml_spans_csv": saved_paths[4],
             }
     repeat_dir = output_dir / "repeat_mapping"
     repeat_dir.mkdir(parents=True, exist_ok=True)
     _report_progress(0, 2, "Preparing shared repeat mapping", progress_callback)
-    repeat_source = unfolded_xml_path or xml_path
-    repeat_report = build_repeat_mapping(xml_path, repeat_source)
+    repeat_report = build_repeat_mapping(xml_path, unfolded_xml_path)
     repeat_csv = repeat_dir / f"{score_id}_repeat_mapping.csv"
     repeat_json = repeat_dir / f"{score_id}_repeat_mapping.json"
     write_repeat_mapping(repeat_report, repeat_csv, repeat_json)
@@ -677,12 +853,10 @@ def prepare_score_sources(
     events_path = xml_dir / "xml_events.csv"
     atomic_write_csv(nodes_path, NODE_FIELDS, nodes)
     atomic_write_csv(events_path, EVENT_FIELDS, events)
+    spans_path = xml_dir / "xml_spans.csv"
+    spans = build_xml_spans(events, spans_path)
     warnings = []
-    if unfolded_xml_path is None:
-        warnings.append(
-            "No unfolded MusicXML was uploaded; identity repeat mapping was used. "
-            "Measures after printed repeats may need review."
-        )
+    warnings.extend(repeat_report.get("structural_warnings", []))
     if repeat_report["unresolved_unfolded_measures"]:
         warnings.append(
             f"Repeat mapping has {len(repeat_report['unresolved_unfolded_measures'])} "
@@ -699,9 +873,17 @@ def prepare_score_sources(
         "pipeline_version": PIPELINE_VERSION,
         "score_id": score_id,
         **source_hashes,
-        "identity_repeat_mapping": unfolded_xml_path is None,
+        "identity_repeat_mapping": repeat_report.get("repeat_group_count", 0) == 0,
+        "repeat_mapping_source": repeat_report.get(
+            "repeat_source", "repetition_musicxml"
+        ),
+        "unfolded_validation": repeat_report.get("unfolded_validation", {}),
         "xml_node_rows": len(nodes),
         "xml_event_rows": len(events),
+        "xml_span_rows": len(spans),
+        "cross_page_xml_span_rows": sum(
+            str(row.get("cross_page", "")).lower() == "true" for row in spans
+        ),
         "bps_note_count": len(bps_notes),
         "bps_note_ids": [str(note["note_id"]) for note in bps_notes],
         "warnings": warnings,
@@ -711,6 +893,7 @@ def prepare_score_sources(
         "repeat_json": repeat_json,
         "xml_nodes_csv": nodes_path,
         "xml_events_csv": events_path,
+        "xml_spans_csv": spans_path,
     }
     atomic_write_json(
         report_path,
@@ -800,6 +983,19 @@ def _canonical_master_rows(
     yolo_hash = _sha256(yolo_path)
     rows: list[dict[str, str]] = []
     for detailed in detailed_rows:
+        occurrences = _json_value(detailed.get("repeat_occurrences_json"), [])
+        first_occurrence = (
+            occurrences[0]
+            if isinstance(occurrences, list)
+            and occurrences
+            and isinstance(occurrences[0], dict)
+            else {}
+        )
+        occurrence_count = detailed.get("repeat_occurrence_count", "")
+        try:
+            repeated = int(str(occurrence_count or "1")) > 1
+        except ValueError:
+            repeated = bool(first_occurrence.get("is_repeated_measure", False))
         row = {field: detailed.get(field, "") for field in OFFICIAL_FIELDS}
         status = detailed.get("status", "")
         alignment_status = {
@@ -839,14 +1035,40 @@ def _canonical_master_rows(
                 "target_type": detailed.get("target_type", ""),
                 "note_ids": detailed.get("note_ids", ""),
                 "pitches": detailed.get("pitches", ""),
+                "written_measure": first_occurrence.get(
+                    "written_measure",
+                    detailed.get(
+                        "start_xml_measure", detailed.get("xml_measure", "")
+                    ),
+                ),
+                "is_repeated_measure": "1" if repeated else "0",
                 "repeat_occurrences_json": detailed.get("repeat_occurrences_json", ""),
-                "repeat_occurrence_count": detailed.get("repeat_occurrence_count", ""),
+                "repeat_occurrence_count": occurrence_count or "1",
                 "repeat_group_id": detailed.get("repeat_group_id", ""),
+                "repeat_status": first_occurrence.get("repeat_status", "none"),
+                "volta_numbers": first_occurrence.get("volta_numbers", "[]"),
+                "repeat_source": first_occurrence.get(
+                    "repeat_source", "repetition_musicxml"
+                ),
+                "repeat_mapping_status": detailed.get(
+                    "repeat_mapping_status",
+                    first_occurrence.get("mapping_status", ""),
+                ),
                 "movement_scope_status": "in_bpsd_scope",
                 "page_mapping_status": "direct",
                 "mapping_source": "web_uploaded_page_number",
                 "match_source": detailed.get("match_source", ""),
                 "confidence": detailed.get("confidence", ""),
+                "match_score": detailed.get(
+                    "match_score", detailed.get("confidence", "")
+                ),
+                "confidence_calibrated": detailed.get(
+                    "confidence_calibrated", "false"
+                ),
+                "geometry_score": detailed.get("geometry_score", ""),
+                "candidate_margin": detailed.get("candidate_margin", ""),
+                "count_agreement": detailed.get("count_agreement", ""),
+                "xml_time_confirmed": detailed.get("xml_time_confirmed", ""),
                 "alignment_status": alignment_status,
                 "review_status": (
                     "not_required" if alignment_status == "matched" else "needs_review"
@@ -895,6 +1117,9 @@ def run_uploaded_alignment(
     build_complete_exports: bool = True,
     system_start_measures: list[int] | None = None,
     page_end_measure: int | None = None,
+    render_qa_images: bool = True,
+    render_class_overlays: bool = True,
+    render_auxiliary_overlays: bool = True,
 ) -> dict:
     """Run a complete single-page alignment and lossless CSV export."""
 
@@ -928,7 +1153,7 @@ def run_uploaded_alignment(
     else:
         input_counts["clean_reference_pages"] = 0
 
-    _report_progress(1, 6, "Mapping written and unfolded measures", progress_callback)
+    _report_progress(1, 6, "Parsing MusicXML repeat structure", progress_callback)
     if prepared_score is None:
         prepared_score = prepare_score_sources(
             xml_path=xml_path,
@@ -957,6 +1182,10 @@ def run_uploaded_alignment(
         clean_image_path=clean_image_path,
         system_start_measures=system_start_measures,
         page_end_measure=page_end_measure,
+        whole_score_spans=_read_csv(Path(prepared_score["xml_spans_csv"])),
+        render_qa_images=render_qa_images,
+        render_class_overlays=render_class_overlays,
+        render_auxiliary_overlays=render_auxiliary_overlays,
     )
     clean_reference = alignment_report.get("clean_reference", {})
     if clean_image_path is not None and not clean_reference.get("used"):
@@ -966,6 +1195,19 @@ def run_uploaded_alignment(
         )
     detailed_path = Path(alignment_report["outputs"]["detailed_csv"])
     detailed_rows = _read_csv(detailed_path)
+    unknown_timeline_classes = sorted(
+        {
+            str(row.get("class", ""))
+            for row in detailed_rows
+            if musical_time_for_class(row.get("class")) is None
+        }
+        - {""}
+    )
+    if unknown_timeline_classes:
+        warnings.append(
+            "musical_time remains blank for context-dependent or unknown classes: "
+            + ", ".join(unknown_timeline_classes)
+        )
     missing_time_lines = [
         row.get("txt_line", "")
         for row in detailed_rows
@@ -992,12 +1234,16 @@ def run_uploaded_alignment(
     yolo_aligned_path = output_dir / "yolo_aligned.csv"
     final_bps_path = output_dir / "bps_omr_final.csv"
     review_queue_path = output_dir / "review_queue.csv"
+    final_bps_rows = build_final_bps_rows(master_rows)
     atomic_write_csv(yolo_master_path, FIELDS, master_rows)
     atomic_write_csv(yolo_aligned_path, FIELDS, master_rows)
     atomic_write_csv(
         final_bps_path,
         FINAL_BPS_FIELDS,
-        build_final_bps_rows(master_rows),
+        final_bps_rows,
+    )
+    errors.extend(
+        validate_final_bps_rows(final_bps_rows, expected_count=len(master_rows))
     )
     atomic_write_csv(
         review_queue_path,
@@ -1008,6 +1254,7 @@ def run_uploaded_alignment(
     _report_progress(3, 6, "Exporting every MusicXML node and event", progress_callback)
     xml_nodes_path = Path(prepared_score["xml_nodes_csv"])
     xml_events_path = Path(prepared_score["xml_events_csv"])
+    xml_spans_path = Path(prepared_score["xml_spans_csv"])
     nodes = _read_csv(xml_nodes_path)
     events = _read_csv(xml_events_path)
 
@@ -1074,6 +1321,7 @@ def run_uploaded_alignment(
         "yolo_master_csv": yolo_master_path,
         "xml_nodes_csv": xml_nodes_path,
         "xml_events_csv": xml_events_path,
+        "xml_spans_csv": xml_spans_path,
         **complete_output_paths,
         **overlay_paths,
     }
@@ -1090,6 +1338,11 @@ def run_uploaded_alignment(
             "identity_repeat_mapping", unfolded_xml_path is None
         ),
         "alignment_rows": len(master_rows),
+        "final_rows_with_blank_time": sum(
+            not row.get("start_meas") or not row.get("end_meas")
+            for row in final_bps_rows
+        ),
+        "unknown_musical_time_classes": unknown_timeline_classes,
         "yolo_rows_with_time": len(master_rows) - len(missing_time_lines),
         "yolo_rows_needing_review": sum(
             row.get("status") != "matched" for row in detailed_rows
@@ -1098,6 +1351,9 @@ def run_uploaded_alignment(
             Counter(row.get("status", "") for row in detailed_rows)
         ),
         "class_overlay_count": alignment_report.get("class_overlay_count", 0),
+        "class_overlay_available_count": alignment_report.get(
+            "class_overlay_available_count", 0
+        ),
         "clean_reference": clean_reference,
         "xml_node_rows": len(nodes),
         "xml_event_rows": len(events),

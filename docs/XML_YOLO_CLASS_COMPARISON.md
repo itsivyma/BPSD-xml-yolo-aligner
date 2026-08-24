@@ -338,21 +338,21 @@ YOLO TXT 沒有使用。
 
 | YOLO 類別群 | MusicXML 表示 | 對應狀態 | 主要差異 |
 |---|---|---|---|
-| accidental | `<accidental>`、pitch alter | 間接可對應 | YOLO 只標 small 圖形；XML 表示音高語意，不保證有掃描座標 |
+| accidental | `<accidental>`、pitch alter | small grace accidental 已支援 | 只在 `<grace>`、accidental subtype、系統/staff 與互選幾何均一致時自動確認；否則待審 |
 | staccato | `<articulations><staccato/>` | 可對應 | YOLO 拆 above/below；XML 本批未明確拆 placement |
 | accent／marcato | `<accent>`／`<strong-accent>` | 部分可對應 | 本批 XML 只有 1 個 strong-accent，與 16 個 YOLO accent 框不等量 |
-| dynamicF/P/S/M/Z | `<dynamics>` 的 `f`, `p`, `sf`, `mf` 等 | 多對一／一對多 | YOLO 常把複合力度拆成字母；XML 把 `sf`、`ff` 等存成完整值 |
-| crescendo/diminuendo | `<words>` 或 `<wedge>` | 可對應但需分型 | YOLO 分文字、hairpin、long；XML 分 words 與 wedge start/stop |
+| dynamicF/P/S/M/Z | `<dynamics>` 的 `f`, `p`, `sf`, `mf`, `sfz` 等 | 已支援字母拆分 | YOLO 的各字母框會依 XML 複合力度拆分；仍需 mutual-best 幾何確認 |
+| crescendo/diminuendo | `<words>` 或 `<wedge>` | point words 與 hairpin 已支援 | 一般文字對 words；hairpin 對 wedge start/stop；缺少可靠 stop 的 `Long` 維持待審 |
 | fermataAbove/Below | `<fermata>` | 可對應 | XML 有語意但 placement 不一定足以區分掃描方向 |
 | fingering0–5 | 理論上 `<technical><fingering>` | 本批無直接對應 | XML 完全沒有 fingering element，必須依影像幾何連到 note，並人工確認 |
-| flag/beam/notehead/stem | `<type>`、`<beam>`、`<stem>`、pitch | 間接推導 | XML 描述整個 note；YOLO 標的是 note 的視覺零件，沒有一對一 event |
-| pedal/keyboard | `<pedal>` 或 `<words>` | 部分可對應 | XML pedal 是 start/stop span；YOLO 可能是 Ped glyph、release glyph 或文字 |
+| flag/beam/notehead/stem | `<grace>`、`<type>`、`<beam>`、`<stem>`、pitch | small grace component 已支援 | chord/beam 的所有 BPSD note ID 會寫入 `connected_note`；flag 只對無 beam 且 type/stem 一致的 grace note |
+| pedal/keyboard | `<pedal>` 或 `<words>` | `<pedal>` endpoint 已支援 | `keyboardPed`/`keyboardPedalPed` 對 start，`keyboardPedalUp` 對 stop；只有 words 或缺失 endpoint 時待審 |
 | numeral0–9 | tuplet、fingering、ending 或文字上下文 | 不可只看 class | 同一數字圖形可能代表完全不同的音樂語意 |
-| trill/turn/wiggle | `<trill-mark>`、`<turn>`、`<wavy-line>` | 可對應 | trill 主符號與延伸線在 XML 是不同 element |
-| ottavaBracket | `<octave-shift>` | 可對應 | XML 是 start/stop；YOLO 通常是一個可跨距離的視覺框 |
+| trill/turn/wiggle | `<trill-mark>`、`<turn>`、`<wavy-line>` | 已支援 | trill/turn 為單點；wiggle 必須配對 wavy-line start/stop，否則待審 |
+| ottavaBracket | `<octave-shift>` | 同系統 start/stop 已支援 | 跨系統或缺少任一 endpoint 不自動確認，避免猜測開始/結束時間 |
 | slur | `<slur type=start/stop>` | 可對應但為 span | 一個 YOLO 曲線框需要連到兩個 XML note endpoints |
 | tie | `<tie>`／`<tied>` start/stop | 可對應但為 span | XML 同時保存 playback tie 與 notation tie，必須去除雙重計數 |
-| tempo/term | `<words>`、`<metronome>` | 文字正規化後可對應 | YOLO 常以單字 class 標註；XML 可能把整個片語放在一個 words element |
+| tempo/term | `<words>`、`<metronome>` | words 正規化已支援 | 同一 XML 片語可對多個分詞 class；拼字不一致或無 words 證據時待審 |
 | tuplet | `<tuplet>`＋`<time-modification>` | 可對應但為群組 | YOLO 是數字／括號圖形；XML 是一組 notes 與 start/stop 關係 |
 | special text | `<words>`、repeat/ending 或可能缺漏 | 本批多數無直接對應 | 三個 YOLO 特殊文字在六份 XML 的文字內容中找不到完全對應字串 |
 | tremolo | 理論上 `<ornaments><tremolo>` | 本批無直接對應 | YOLO 定義存在但實際框數為 0，XML 也未出現 tremolo element |

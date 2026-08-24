@@ -16,6 +16,7 @@ from bpsd_aligner.web_pipeline import (
     build_xml_spans,
     prepare_score_sources,
     run_uploaded_alignment,
+    validate_final_bps_rows,
 )
 from bpsd_aligner.job_store import request_job_cancellation, write_job_manifest
 from bpsd_aligner.web_worker import run_background_job
@@ -131,7 +132,6 @@ def test_uploaded_alignment_preserves_all_sources_and_renders_overlay(tmp_path):
         review_queue = list(csv.DictReader(file))
     assert len(review_queue) == report["yolo_rows_needing_review"]
     assert all(row["alignment_status"] != "matched" for row in review_queue)
-
     with Path(report["outputs"]["final_bps_csv"]).open(
         newline="", encoding="utf-8"
     ) as file:
@@ -144,6 +144,7 @@ def test_uploaded_alignment_preserves_all_sources_and_renders_overlay(tmp_path):
     assert final_dolce["end_meas"] == ""
     assert final_dolce["start_note"] == ""
     assert final_dolce["human_corrected"] == "0"
+    assert final_dolce["is_repeated_measure"] in {"0", "1"}
     assert all(value != "NA" for row in final_rows for value in row.values())
 
     xml_events_path = Path(report["outputs"]["xml_events_csv"])
@@ -255,6 +256,43 @@ def test_uploaded_alignment_preserves_all_sources_and_renders_overlay(tmp_path):
     ) == len(event_rows)
 
 
+def test_uploaded_alignment_can_skip_qa_images_for_regression(tmp_path):
+    inputs = _write_uploads(tmp_path)
+
+    report = run_uploaded_alignment(
+        **inputs,
+        output_dir=tmp_path / "lightweight-output",
+        page_number=1,
+        score_id="synthetic-score",
+        build_complete_exports=False,
+        render_qa_images=False,
+    )
+
+    assert report["passed"] is True
+    assert report["class_overlay_count"] == 0
+    assert not any(name.endswith("overlay") for name in report["outputs"])
+
+
+def test_uploaded_alignment_can_defer_non_overview_images(tmp_path):
+    inputs = _write_uploads(tmp_path)
+
+    report = run_uploaded_alignment(
+        **inputs,
+        output_dir=tmp_path / "output-overview-only",
+        render_class_overlays=False,
+        render_auxiliary_overlays=False,
+    )
+
+    overlay_names = {
+        name for name in report["outputs"] if name.endswith("overlay")
+    }
+    assert overlay_names == {"review_overlay"}
+    assert Path(report["outputs"]["review_overlay"]).is_file()
+    assert report["class_overlay_count"] == 0
+    assert report["class_overlay_available_count"] == 2
+    assert Path(report["outputs"]["validation_json"]).is_file()
+
+
 def test_shared_score_checkpoint_is_bound_to_source_hashes(tmp_path):
     inputs = _write_uploads(tmp_path)
     output = tmp_path / "shared"
@@ -264,6 +302,7 @@ def test_shared_score_checkpoint_is_bound_to_source_hashes(tmp_path):
         output_dir=output,
         score_id="hash-test",
     )
+    assert Path(first["xml_spans_csv"]).is_file()
     inputs["bps_notes_path"].write_text(
         inputs["bps_notes_path"].read_text(encoding="utf-8")
         + "1.000;2.000;1.000;62;D4;1/4;;0\n",
@@ -430,7 +469,7 @@ def test_tie_spans_pair_by_pitch_and_deduplicate_tie_and_tied_markers(tmp_path: 
     for event_id, pitch, note_id, time in (
         ("N1", "60", "10", "1"),
         ("N2", "64", "11", "1"),
-        ("N3", "60", "12", "2"),
+        ("N3", "60", "10", "2"),
         ("N4", "64", "13", "2"),
     ):
         events.append(
@@ -470,9 +509,11 @@ def test_tie_spans_pair_by_pitch_and_deduplicate_tie_and_tied_markers(tmp_path: 
     spans = build_xml_spans(events, tmp_path / "tie-spans.csv")
     assert len(spans) == 2
     assert {(row["start_note"], row["end_note"]) for row in spans} == {
-        ("10", "12"),
+        ("10", "10"),
         ("11", "13"),
     }
+    tied_span = next(row for row in spans if row["start_note"] == "10")
+    assert tied_span["connected_note"] == '["10"]'
 
 
 def test_final_bps_rows_keep_human_corrections_and_clear_machine_candidates():
@@ -506,3 +547,137 @@ def test_final_bps_rows_keep_human_corrections_and_clear_machine_candidates():
     assert corrected["end_meas"] == "44.0"
     assert corrected["start_note"] == ""
     assert corrected["human_corrected"] == "1"
+
+
+def test_final_bps_rows_add_only_review_and_repeated_measure_fields():
+    source = {
+        "class_id": "56",
+        "x": "0.5",
+        "y": "0.5",
+        "w": "0.2",
+        "h": "0.01",
+        "class": "slur",
+        "musical_time": "0",
+        "start_meas": "52.0",
+        "end_meas": "53.0",
+        "start_note": "10",
+        "end_note": "11",
+        "connected_note": "[10,11]",
+        "stem_dir": "NA",
+        "alignment_status": "matched",
+        "xml_time_confirmed": "true",
+        "human_approved": "false",
+        "written_measure": "52",
+        "is_repeated_measure": "1",
+        "repeat_occurrence_count": "2",
+        "repeat_group_id": "R01",
+        "repeat_status": "repeat_body",
+        "volta_numbers": "[]",
+        "repeat_source": "repetition_musicxml",
+    }
+
+    row = build_final_bps_rows([source])[0]
+
+    assert list(row) == FINAL_BPS_FIELDS
+    assert row["start_meas"] == "52.0"
+    assert row["is_repeated_measure"] == "1"
+    assert set(row) == {
+        "class_id", "x", "y", "w", "h", "class", "musical_time",
+        "start_meas", "end_meas", "start_note", "end_note",
+        "connected_note", "stem_dir", "human_corrected",
+        "is_repeated_measure",
+    }
+
+
+def test_final_bps_rows_keep_stem_direction_for_stem_subclasses():
+    source = {
+        "class_id": "88",
+        "x": "0.5",
+        "y": "0.5",
+        "w": "0.01",
+        "h": "0.1",
+        "class": "stemSmall",
+        "musical_time": "0",
+        "start_meas": "1.0",
+        "end_meas": "1.25",
+        "start_note": "10",
+        "end_note": "10",
+        "connected_note": "[10]",
+        "stem_dir": "1",
+        "alignment_status": "matched",
+        "xml_time_confirmed": "true",
+        "human_approved": "false",
+    }
+
+    row = build_final_bps_rows([source])[0]
+
+    assert row["stem_dir"] == "1"
+
+
+def test_final_bps_rows_clear_matched_values_without_confirmed_xml_time():
+    source = {
+        "class_id": "160",
+        "x": "0.5",
+        "y": "0.5",
+        "w": "0.05",
+        "h": "0.03",
+        "class": "tuplet3",
+        "musical_time": "0",
+        "start_meas": "10.0",
+        "end_meas": "10.5",
+        "start_note": "10",
+        "end_note": "12",
+        "connected_note": "[10,11,12]",
+        "stem_dir": "",
+        "alignment_status": "matched",
+        "xml_time_confirmed": "false",
+        "human_approved": "false",
+    }
+
+    row = build_final_bps_rows([source])[0]
+
+    assert row["start_meas"] == ""
+    assert row["end_meas"] == ""
+    assert row["start_note"] == ""
+    assert row["end_note"] == ""
+    assert row["connected_note"] == ""
+
+
+def test_final_bps_validator_enforces_pdf_field_semantics():
+    valid = {
+        "class_id": "56",
+        "x": "0.5",
+        "y": "0.5",
+        "w": "0.2",
+        "h": "0.01",
+        "class": "slur",
+        "musical_time": "0",
+        "start_meas": "52.0",
+        "end_meas": "53.0",
+        "start_note": "10",
+        "end_note": "11",
+        "connected_note": "[10,11]",
+        "stem_dir": "",
+        "human_corrected": "0",
+        "is_repeated_measure": "1",
+    }
+
+    assert validate_final_bps_rows([valid], expected_count=1) == []
+
+    invalid = {
+        **valid,
+        "musical_time": "1",
+        "start_meas": "54",
+        "end_meas": "53",
+        "start_note": "10",
+        "end_note": "10",
+        "connected_note": "[10,11]",
+        "stem_dir": "1",
+    }
+    errors = validate_final_bps_rows([invalid], expected_count=2)
+
+    assert any("row count" in error for error in errors)
+    assert any("musical_time" in error for error in errors)
+    assert any("start_meas must not exceed" in error for error in errors)
+    assert any("equal start/end notes" in error for error in errors)
+    assert any("stem_dir" in error for error in errors)

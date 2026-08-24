@@ -13,6 +13,7 @@ from pathlib import Path
 
 from defusedxml.ElementTree import DefusedXMLParser
 
+from bpsd_aligner import __version__ as PIPELINE_VERSION
 from pipeline_checkpoint import (
     atomic_write_csv,
     atomic_write_json,
@@ -22,7 +23,6 @@ from pipeline_checkpoint import (
 )
 
 
-PIPELINE_VERSION = "0.3.0"
 BPS_FIELDS = [
     "class_id", "x", "y", "w", "h", "class", "musical_time",
     "start_meas", "end_meas", "start_note", "end_note",
@@ -46,6 +46,9 @@ EVENT_FIELDS = BPS_FIELDS + [
     "articulation_json", "fermata_json", "slur_json", "tie_json",
     "tuplet_json", "ornament_json", "time_modification_json",
     "direction_json", "clef_json", "key_signature_json", "time_signature",
+    "written_measure", "is_repeated_measure", "repeat_occurrence_count",
+    "repeat_group_id", "repeat_status", "volta_numbers", "repeat_source",
+    "repeat_mapping_status",
     "repeat_json", "event_payload_json", "anchor_xml_event_ids_json",
     "xml_attributes_json", "xml_text",
     "xml_xpath", "source_xml_path", "pipeline_version", "validation_status",
@@ -444,6 +447,16 @@ def extract_events(
                 "repeat_occurrence": int(mapping["repeat_occurrence"]),
                 "repeat_occurrence_count": int(mapping["repeat_occurrence_count"]),
                 "repeat_group_id": mapping.get("repeat_group_id", ""),
+                "written_measure": mapping.get(
+                    "written_measure", context.get("measure_number", "")
+                ),
+                "performance_measure": mapping.get(
+                    "performance_measure", mapping["unfolded_measure_index"]
+                ),
+                "is_repeated_measure": mapping.get("is_repeated_measure", ""),
+                "repeat_status": mapping.get("repeat_status", "none"),
+                "volta_numbers": mapping.get("volta_numbers", "[]"),
+                "repeat_source": mapping.get("repeat_source", ""),
                 "mapping_status": mapping.get("mapping_status", ""),
                 "start_meas": int(mapping["unfolded_measure_index"]) - 1 + float(context.get("timeline_offset", 0)) + within,
                 "end_meas": int(mapping["unfolded_measure_index"]) - 1 + float(context.get("timeline_offset", 0)) + within + duration_measures,
@@ -458,6 +471,12 @@ def extract_events(
                     "repeat_occurrence": 1,
                     "repeat_occurrence_count": 1,
                     "repeat_group_id": "",
+                    "written_measure": context["measure_number"],
+                    "performance_measure": context["measure_index"],
+                    "is_repeated_measure": False,
+                    "repeat_status": "none",
+                    "volta_numbers": "[]",
+                    "repeat_source": "written_fallback",
                     "mapping_status": "written_fallback",
                     "start_meas": context["written_start"],
                     "end_meas": context["written_end"],
@@ -467,6 +486,22 @@ def extract_events(
         if occurrences:
             row["start_meas"] = f"{occurrences[0]['start_meas']:.6f}"
             row["end_meas"] = f"{occurrences[0]['end_meas']:.6f}"
+            row["written_measure"] = occurrences[0].get("written_measure", "")
+            row["is_repeated_measure"] = str(
+                occurrences[0].get("is_repeated_measure", False)
+            ).lower()
+            row["repeat_occurrence_count"] = occurrences[0].get(
+                "repeat_occurrence_count", len(occurrences)
+            )
+            row["repeat_group_id"] = occurrences[0].get("repeat_group_id", "")
+            row["repeat_status"] = occurrences[0].get("repeat_status", "none")
+            row["volta_numbers"] = occurrences[0].get("volta_numbers", "[]")
+            row["repeat_source"] = occurrences[0].get("repeat_source", "")
+            row["repeat_mapping_status"] = occurrences[0].get(
+                "mapping_status", ""
+            )
+            if row["repeat_mapping_status"] == "structural_unfolded_disagreement":
+                row["validation_status"] = "repeat_mapping_review"
         events.append(row)
         return row
 

@@ -10,7 +10,27 @@ from bpsd_aligner.web_utils import (
     read_csv_bytes,
     sanitize_path_columns,
     summarize_rows,
+    upload_destination,
 )
+
+
+def test_role_specific_upload_names_prevent_same_named_xml_collision(tmp_path):
+    repetition = upload_destination(
+        tmp_path,
+        "Beethoven_Op090-01.xml",
+        "score.xml",
+        stored_name="repetition.xml",
+    )
+    unfolded = upload_destination(
+        tmp_path,
+        "Beethoven_Op090-01.xml",
+        "score_unfolded.xml",
+        stored_name="unfolded.xml",
+    )
+
+    assert repetition != unfolded
+    assert repetition.name == "repetition.xml"
+    assert unfolded.name == "unfolded.xml"
 
 
 def test_group_review_overlays_builds_page_first_review_and_class_model():
@@ -42,6 +62,21 @@ def test_group_review_overlays_builds_page_first_review_and_class_model():
         "classes": {"slur": b"slur-2"},
         "needs_review": 0,
     }
+
+
+def test_group_review_overlays_lists_classes_without_prerendered_images():
+    rows = [
+        {"page_id": "page-01", "class": "slur", "status": "review"},
+        {"page_id": "page-01", "class": "tie", "status": "matched"},
+    ]
+
+    pages = group_review_overlays(
+        {"page-01__review_overlay": b"overview"},
+        rows,
+    )
+
+    assert pages["page-01"]["review_overlay"] == b"overview"
+    assert pages["page-01"]["classes"] == {"slur": None, "tie": None}
 
 
 def test_sanitize_path_columns_keeps_only_filenames():

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from bpsd_aligner import __version__ as PIPELINE_VERSION
 from bps_xml_alignment import (
     assign_system,
     detect_systems,
@@ -28,7 +29,12 @@ from pipeline_checkpoint import (
 )
 
 
-PIPELINE_VERSION = "0.3.0"
+def _as_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes"}
+
+
 OFFICIAL_FIELDS = [
     "class_id", "x", "y", "w", "h", "class", "musical_time",
     "start_meas", "end_meas", "start_note", "end_note",
@@ -40,9 +46,13 @@ EXTENDED_FIELDS = [
     "bps_notes_path", "image_sha256", "yolo_sha256", "scan_system_index",
     "xml_page", "xml_systems_json", "written_measure_start", "written_measure_end",
     "xml_measure", "xml_symbol", "staff", "target_type", "note_ids", "pitches",
-    "repeat_occurrences_json", "repeat_occurrence_count", "repeat_group_id",
+    "written_measure", "is_repeated_measure", "repeat_occurrences_json",
+    "repeat_occurrence_count", "repeat_group_id", "repeat_status",
+    "volta_numbers", "repeat_source", "repeat_mapping_status",
     "movement_scope_status", "page_mapping_status", "mapping_source",
-    "match_source", "confidence", "alignment_status", "review_status",
+    "match_source", "confidence", "match_score", "confidence_calibrated",
+    "geometry_score", "candidate_margin", "count_agreement",
+    "xml_time_confirmed", "alignment_status", "review_status",
     "human_approved", "reviewer", "reviewed_at", "review_source",
     "original_candidate_json", "corrected_value_json", "comment",
     "target_x_px", "target_y_px", "end_target_x_px", "end_target_y_px",
@@ -452,6 +462,18 @@ def run_dataset(
             system_number = assign_system(box, systems, image.height)
             candidate = candidate_by_line.get(box["txt_line"], _empty_candidate(box, system_number))
             system_scope = scope[(page["page_id"], system_number)]
+            try:
+                repeat_occurrences = json.loads(
+                    candidate.get("repeat_occurrences_json") or "[]"
+                )
+            except (json.JSONDecodeError, TypeError):
+                repeat_occurrences = []
+            first_occurrence = (
+                repeat_occurrences[0]
+                if repeat_occurrences
+                and isinstance(repeat_occurrences[0], dict)
+                else {}
+            )
             row = {field: candidate.get(field, "") for field in OFFICIAL_FIELDS}
             row.update({
                 "dataset_id": "Xia-BPSD-alignment-v1", "score_id": page["score_id"],
@@ -471,11 +493,34 @@ def run_dataset(
                 "repeat_occurrences_json": candidate.get("repeat_occurrences_json", ""),
                 "repeat_occurrence_count": candidate.get("repeat_occurrence_count", ""),
                 "repeat_group_id": candidate.get("repeat_group_id", ""),
+                "written_measure": first_occurrence.get(
+                    "written_measure", candidate.get("xml_measure", "")
+                ),
+                "is_repeated_measure": str(
+                    _as_bool(first_occurrence.get("is_repeated_measure", False))
+                ).lower(),
+                "repeat_status": first_occurrence.get("repeat_status", "none"),
+                "volta_numbers": first_occurrence.get("volta_numbers", "[]"),
+                "repeat_source": first_occurrence.get("repeat_source", ""),
+                "repeat_mapping_status": candidate.get(
+                    "repeat_mapping_status",
+                    first_occurrence.get("mapping_status", ""),
+                ),
                 "movement_scope_status": system_scope["movement_scope_status"],
                 "page_mapping_status": system_scope["page_mapping_status"],
                 "mapping_source": system_scope["mapping_source"],
                 "match_source": candidate.get("match_source", ""),
                 "confidence": candidate.get("confidence", ""),
+                "match_score": candidate.get(
+                    "match_score", candidate.get("confidence", "")
+                ),
+                "confidence_calibrated": candidate.get(
+                    "confidence_calibrated", "false"
+                ),
+                "geometry_score": candidate.get("geometry_score", ""),
+                "candidate_margin": candidate.get("candidate_margin", ""),
+                "count_agreement": candidate.get("count_agreement", ""),
+                "xml_time_confirmed": candidate.get("xml_time_confirmed", ""),
                 "alignment_status": {"matched": "matched", "inferred": "candidate", "review": "ambiguous"}.get(candidate.get("status"), "unresolved"),
                 "review_status": "needs_review", "human_approved": "false", "reviewer": "",
                 "reviewed_at": "", "review_source": "", "original_candidate_json": "",
@@ -485,12 +530,12 @@ def run_dataset(
             })
 
             if system_scope["movement_scope_status"] == "outside_bpsd_scope":
-                for field in ["musical_time", "start_meas", "end_meas", "start_note", "end_note", "connected_note", "xml_measure", "xml_symbol", "staff", "target_type", "note_ids", "pitches", "repeat_occurrences_json", "repeat_occurrence_count", "repeat_group_id", "match_source", "confidence", "target_x_px", "target_y_px"]:
+                for field in ["musical_time", "start_meas", "end_meas", "start_note", "end_note", "connected_note", "xml_measure", "xml_symbol", "staff", "target_type", "note_ids", "pitches", "written_measure", "is_repeated_measure", "repeat_occurrences_json", "repeat_occurrence_count", "repeat_group_id", "repeat_status", "volta_numbers", "repeat_source", "repeat_mapping_status", "match_source", "confidence", "match_score", "geometry_score", "candidate_margin", "count_agreement", "xml_time_confirmed", "target_x_px", "target_y_px"]:
                     row[field] = ""
                 row["alignment_status"] = "xml_missing"
                 row["review_status"] = "not_required"
             elif system_scope["review_status"] == "needs_review":
-                for field in ["start_meas", "end_meas", "start_note", "end_note", "connected_note", "xml_measure", "xml_symbol", "staff", "target_type", "note_ids", "pitches", "repeat_occurrences_json", "repeat_occurrence_count", "repeat_group_id", "match_source", "confidence", "target_x_px", "target_y_px"]:
+                for field in ["start_meas", "end_meas", "start_note", "end_note", "connected_note", "xml_measure", "xml_symbol", "staff", "target_type", "note_ids", "pitches", "written_measure", "is_repeated_measure", "repeat_occurrences_json", "repeat_occurrence_count", "repeat_group_id", "repeat_status", "volta_numbers", "repeat_source", "repeat_mapping_status", "match_source", "confidence", "match_score", "geometry_score", "candidate_margin", "count_agreement", "xml_time_confirmed", "target_x_px", "target_y_px"]:
                     row[field] = ""
                 row["alignment_status"] = "unresolved"
                 row["error_code"] = "merged_system_mapping_review"
