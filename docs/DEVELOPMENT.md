@@ -66,8 +66,9 @@ measure and cross-page changes even when aggregate row counts are unchanged.
 
 - One commit should either move code or change behavior, not both.
 - New geometry behavior belongs in `bpsd_aligner/geometry.py`; review drawing
-  belongs in `bpsd_aligner/overlay.py`. `bps_xml_alignment.py` temporarily
-  re-exports their public names for older scripts.
+  belongs in `bpsd_aligner/overlay.py`; generic one-to-one pairing belongs in
+  `bpsd_aligner/candidate_scoring.py`. `bps_xml_alignment.py` temporarily
+  re-exports compatibility names for older scripts.
 - Preserve public CLI commands and compatibility imports during a move.
 - Use typed records at module boundaries instead of adding more unstructured
   dictionary keys.

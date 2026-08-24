@@ -42,8 +42,8 @@ Never update the baseline until a human has verified the changed assignments.
 
 ## Recommended next work
 
-1. Continue decomposing `bps_xml_alignment.py`. Geometry and rendering are now
-   isolated; candidate scoring, point and span matchers remain.
+1. Continue decomposing `bps_xml_alignment.py`. Geometry, rendering and generic
+   candidate scoring are now isolated; point and span matchers remain.
 2. Decompose `web.py` into upload, job status, results and Review components.
 3. Replace cross-module row dictionaries with typed domain records at stable
    boundaries.

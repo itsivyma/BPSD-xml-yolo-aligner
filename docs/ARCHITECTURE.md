@@ -44,6 +44,7 @@ BPSD note CSV ──────── official time and note IDs ────�
 | Module | Responsibility |
 |---|---|
 | `bps_xml_alignment.py` | Current single-page matching engine and compatibility facade |
+| `bpsd_aligner/candidate_scoring.py` | Generic one-to-one pairing, mutual-best checks and candidate margins |
 | `bpsd_aligner/geometry.py` | Staff/system detection, barlines and box-to-system assignment |
 | `bpsd_aligner/overlay.py` | Pure in-memory and file review-overlay rendering |
 | `repeat_mapping.py` | Written-to-performance repeat occurrence mapping |
@@ -88,14 +89,13 @@ persistent job directory after identity validation.
 `bps_xml_alignment.py` and `web.py` remain the largest modules. Split them by
 moving behavior without changing it:
 
-Geometry and overlay rendering have already been extracted behind compatibility
-imports. Continue with:
+Geometry, overlay rendering and generic candidate scoring have already been
+extracted behind compatibility imports. Continue with:
 
-1. candidate scoring;
-2. point-symbol matchers;
-3. span/endpoint matchers;
-4. upload/job controllers;
-5. Review UI components.
+1. point-symbol matchers;
+2. span/endpoint matchers;
+3. upload/job controllers;
+4. Review UI components.
 
 After each move, run unit tests and the fixed regression suite. Do not combine a
 module move with a new matching rule in the same commit.

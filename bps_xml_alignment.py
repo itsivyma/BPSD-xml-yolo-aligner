@@ -30,6 +30,10 @@ import numpy as np
 from PIL import Image
 from defusedxml import ElementTree as SafeET
 from bpsd_aligner.bps_omr_schema import musical_time_for_class
+from bpsd_aligner.candidate_scoring import (
+    greedy_pairs as _greedy_pairs,
+    mutual_geometry_pairs as _mutual_geometry_pairs,
+)
 from bpsd_aligner.geometry import (
     StaffGeometry,
     SystemGeometry,
@@ -2613,30 +2617,6 @@ def _row_from_anchors(
     return row
 
 
-def _greedy_pairs(
-    boxes: list[dict],
-    targets: list[dict],
-    cost,
-) -> list[tuple[dict, dict, float]]:
-    scored = sorted(
-        (cost(box, target), box_index, target_index)
-        for box_index, box in enumerate(boxes)
-        for target_index, target in enumerate(targets)
-    )
-    used_boxes: set[int] = set()
-    used_targets: set[int] = set()
-    output = []
-    for value, box_index, target_index in scored:
-        if box_index in used_boxes or target_index in used_targets:
-            continue
-        if value >= 1_000_000:
-            continue
-        used_boxes.add(box_index)
-        used_targets.add(target_index)
-        output.append((boxes[box_index], targets[target_index], value))
-    return output
-
-
 def _notation_rule(class_name: str) -> tuple[str, str] | None:
     for prefix, rule in POINT_NOTATION_RULES.items():
         if class_name.startswith(prefix):
@@ -2768,46 +2748,6 @@ def match_point_notations(
                     xml_time_confirmed=True,
                 )
             )
-    return output
-
-
-def _mutual_geometry_pairs(
-    boxes: list[dict],
-    targets: list[dict],
-    cost,
-) -> list[tuple[dict, dict, float, float, bool]]:
-    """Return one-to-one pairs with a mutual-best flag and candidate margin."""
-
-    if not boxes or not targets:
-        return []
-    costs = [
-        [float(cost(box, target)) for target in targets]
-        for box in boxes
-    ]
-    pairs = _greedy_pairs(boxes, targets, cost)
-    output = []
-    for box, target, value in pairs:
-        box_index = boxes.index(box)
-        target_index = targets.index(target)
-        box_costs = sorted(
-            value for value in costs[box_index] if value < 1_000_000
-        )
-        target_costs = sorted(
-            row[target_index] for row in costs if row[target_index] < 1_000_000
-        )
-        second_box = box_costs[1] if len(box_costs) > 1 else value + 1.0
-        second_target = (
-            target_costs[1] if len(target_costs) > 1 else value + 1.0
-        )
-        margin = max(0.0, min(second_box, second_target) - value)
-        mutual = (
-            target_index == min(
-                range(len(targets)), key=lambda index: costs[box_index][index]
-            )
-            and box_index
-            == min(range(len(boxes)), key=lambda index: costs[index][target_index])
-        )
-        output.append((box, target, value, margin, mutual))
     return output
 
 
