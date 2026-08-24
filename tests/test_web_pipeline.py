@@ -17,6 +17,7 @@ from bpsd_aligner.web_pipeline import (
     prepare_score_sources,
     run_uploaded_alignment,
     validate_final_bps_rows,
+    finalize_uploaded_batch,
 )
 from bpsd_aligner.job_store import request_job_cancellation, write_job_manifest
 from bpsd_aligner.web_worker import run_background_job
@@ -95,6 +96,55 @@ def _write_uploads(directory: Path) -> dict[str, Path]:
         "bps_notes_path": bps_path,
         "notes_json_path": categories_path,
     }
+
+
+def test_final_batch_uses_machine_time_only_as_hidden_sort_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    complete_dir = tmp_path / "complete"
+    complete_dir.mkdir()
+    dummy = complete_dir / "empty.csv"
+    dummy.write_text("class\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "bpsd_aligner.web_pipeline.build_batch_information_outputs",
+        lambda **_kwargs: {
+            "validation_errors": [],
+            "xml_event_rows": 0,
+            "xml_node_rows": 0,
+            "timeline_rows": 0,
+            "all_information_rows": 0,
+            "xml_span_rows": 0,
+            "performance_expanded_rows": 0,
+            "outputs": {"empty": dummy},
+        },
+    )
+    later = {field: "" for field in FINAL_BPS_FIELDS}
+    earlier = {field: "" for field in FINAL_BPS_FIELDS}
+    later["class"] = "later"
+    earlier["class"] = "earlier"
+
+    result = finalize_uploaded_batch(
+        score_id="score",
+        pages=[1],
+        page_reports=[],
+        final_entries=[(1, 0, later), (1, 1, earlier)],
+        yolo_entries=[
+            (1, 0, {"start_meas": "20"}),
+            (1, 1, {"start_meas": "10"}),
+        ],
+        detailed_rows=[],
+        xml_events=[],
+        xml_nodes=[],
+        output_dir=tmp_path / "output",
+        overlays={},
+    )
+
+    assert [row["class"] for row in result["final_rows"]] == [
+        "earlier",
+        "later",
+    ]
+    assert all(row["start_meas"] == "" for row in result["final_rows"])
 
 
 def test_uploaded_alignment_preserves_all_sources_and_renders_overlay(tmp_path):

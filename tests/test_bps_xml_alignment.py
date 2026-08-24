@@ -129,6 +129,40 @@ def test_repeat_disagreement_prevents_dynamic_auto_acceptance():
     assert rows[0]["xml_time_confirmed"] == "false"
 
 
+def test_unsupported_navigation_prevents_dynamic_auto_acceptance():
+    boxes = [
+        {
+            "txt_line": 1,
+            "class_id": 29,
+            "class": "dynamicF",
+            "x": 0.50,
+            "y": 0.20,
+            "w": 0.02,
+            "h": 0.02,
+        }
+    ]
+    events = [
+        {
+            "class": "dynamicF",
+            "system": 1,
+            "x_norm": 0.50,
+            "bps_time": 2.0,
+            "xml_measure": 3,
+            "xml_symbol": "f",
+            "staff": 1,
+            "repeat_occurrences": [
+                {"mapping_status": "unsupported_navigation"}
+            ],
+        }
+    ]
+
+    rows, _unused = match_dynamics(boxes, events, _one_system(), 400)
+
+    assert rows[0]["repeat_mapping_status"] == "unsupported_navigation"
+    assert rows[0]["status"] == "review"
+    assert rows[0]["xml_time_confirmed"] == "false"
+
+
 def test_attach_review_note_candidates_orders_nearby_notes_and_keeps_metadata():
     systems = [
         SystemGeometry(
