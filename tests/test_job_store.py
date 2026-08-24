@@ -14,12 +14,14 @@ from bpsd_aligner.job_store import (
     job_directory,
     load_review_state,
     load_page_checkpoint,
+    owner_id_for_subject,
     publish_completed_job,
     prune_job_store,
     restore_job_checkpoint_archive,
     release_job_lease,
     validate_upload_batch,
     validate_page_count,
+    validate_storage_capacity,
     write_job_status,
     write_page_checkpoint,
     write_job_manifest,
@@ -52,6 +54,28 @@ def test_upload_batch_limits_count_and_total_bytes():
         )
     with pytest.raises(ValueError, match="per-file"):
         validate_upload_batch([Upload("large", 10)], max_file_bytes=9)
+
+
+def test_storage_capacity_accounts_for_existing_and_incoming_bytes(tmp_path):
+    existing = tmp_path / "existing.bin"
+    existing.write_bytes(b"12345")
+
+    assert validate_storage_capacity(
+        4, root=tmp_path, max_storage_bytes=9
+    ) == {"used_bytes": 5, "limit_bytes": 9}
+    with pytest.raises(ValueError, match="storage is full"):
+        validate_storage_capacity(5, root=tmp_path, max_storage_bytes=9)
+
+
+def test_owner_ids_are_stable_and_bound_to_deployment_secret(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("BPSD_ALIGNER_CHECKPOINT_SECRET", "owner-secret-" * 3)
+
+    first = owner_id_for_subject("reviewer-a", root=tmp_path)
+    assert first == owner_id_for_subject("reviewer-a", root=tmp_path)
+    assert first != owner_id_for_subject("reviewer-b", root=tmp_path)
 
 
 def test_page_checkpoint_requires_matching_inputs_and_existing_outputs(tmp_path: Path):

@@ -7,7 +7,11 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from bpsd_aligner.job_store import job_store_root, prune_job_store
+from bpsd_aligner.job_store import (
+    job_store_root,
+    job_store_usage_bytes,
+    prune_job_store,
+)
 
 
 def collect_job_statuses(root: Path | None = None) -> dict:
@@ -51,6 +55,7 @@ def collect_job_statuses(root: Path | None = None) -> dict:
         "schema_version": "1.0",
         "job_store": str(store),
         "job_count": len(jobs),
+        "storage_bytes": job_store_usage_bytes(store),
         "state_counts": dict(sorted(counts.items())),
         "jobs": jobs,
     }

@@ -1029,6 +1029,14 @@ def test_load_yolo_keeps_original_line_number(tmp_path):
     assert [box["class"] for box in boxes] == ["dynamicF", "fingering1"]
 
 
+def test_load_yolo_rejects_non_finite_geometry(tmp_path):
+    path = tmp_path / "bad.txt"
+    path.write_text("1 nan 0.5 0.1 0.1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="non-finite geometry"):
+        load_yolo(path)
+
+
 def test_attach_bps_note_ids_matches_time_and_pitch():
     xml_notes = [
         {"bps_time": 1.0, "midi": 60, "staff": 1, "x_norm": 0.2},

@@ -22,8 +22,9 @@ from pipeline_checkpoint import atomic_write_json
 DEFAULT_MAX_FILES = 500
 DEFAULT_MAX_FILE_BYTES = 200 * 1024 * 1024
 DEFAULT_MAX_BATCH_BYTES = 1024 * 1024 * 1024
-DEFAULT_MAX_CONCURRENT_JOBS = 2
+DEFAULT_MAX_CONCURRENT_JOBS = 1
 DEFAULT_MAX_PAGES = 200
+DEFAULT_MAX_STORAGE_BYTES = 20 * 1024 * 1024 * 1024
 DEFAULT_MAX_CHECKPOINT_MEMBERS = 10_000
 DEFAULT_MAX_CHECKPOINT_MEMBER_BYTES = 256 * 1024 * 1024
 DEFAULT_MAX_CHECKPOINT_BYTES = 1024 * 1024 * 1024
@@ -169,6 +170,69 @@ def validate_page_count(page_count: int, *, max_pages: int | None = None) -> int
             "Split the upload or increase BPSD_ALIGNER_MAX_PAGES."
         )
     return page_count
+
+
+def job_store_usage_bytes(root: Path | None = None) -> int:
+    """Return bytes currently stored without following symlinks."""
+
+    store = root or job_store_root()
+    if not store.is_dir():
+        return 0
+    total = 0
+    for directory, _subdirectories, filenames in os.walk(store, followlinks=False):
+        base = Path(directory)
+        for filename in filenames:
+            path = base / filename
+            try:
+                if not path.is_symlink():
+                    total += path.stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def validate_storage_capacity(
+    incoming_bytes: int,
+    *,
+    root: Path | None = None,
+    max_storage_bytes: int | None = None,
+) -> dict[str, int]:
+    """Reject new uploads before the persistent job store exceeds its quota."""
+
+    if incoming_bytes < 0:
+        raise ValueError("incoming upload size cannot be negative")
+    configured = max_storage_bytes
+    if configured is None:
+        configured = int(
+            os.environ.get(
+                "BPSD_ALIGNER_MAX_STORAGE_BYTES",
+                DEFAULT_MAX_STORAGE_BYTES,
+            )
+        )
+    if configured < 1:
+        raise ValueError("BPSD_ALIGNER_MAX_STORAGE_BYTES must be at least 1")
+    used = job_store_usage_bytes(root)
+    if used + incoming_bytes > configured:
+        raise ValueError(
+            "Persistent job storage is full: "
+            f"{used / (1024 ** 3):.2f} GiB used, "
+            f"{incoming_bytes / (1024 ** 2):.1f} MiB incoming, "
+            f"{configured / (1024 ** 3):.2f} GiB limit. "
+            "Prune expired jobs or raise BPSD_ALIGNER_MAX_STORAGE_BYTES."
+        )
+    return {"used_bytes": used, "limit_bytes": configured}
+
+
+def owner_id_for_subject(subject: str, *, root: Path | None = None) -> str:
+    """Return a deployment-secret-bound owner namespace."""
+
+    store = root or job_store_root()
+    placeholder_job = store / ("0" * 64)
+    return hmac.new(
+        _checkpoint_secret(placeholder_job),
+        subject.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def write_job_manifest(

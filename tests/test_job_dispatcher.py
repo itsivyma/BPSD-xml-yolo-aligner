@@ -1,6 +1,11 @@
 import json
 
-from bpsd_aligner.job_dispatcher import queued_requests, run_dispatcher
+from bpsd_aligner.job_dispatcher import (
+    acquire_dispatcher_lock,
+    queued_requests,
+    release_dispatcher_lock,
+    run_dispatcher,
+)
 
 
 def _queued_job(root, name: str, created_at: str):
@@ -34,3 +39,11 @@ def test_dispatcher_orders_queue_and_continues_after_failed_job(tmp_path, monkey
     assert queued_requests(tmp_path) == [earlier, later]
     assert run_dispatcher(tmp_path, idle_grace_seconds=0, max_idle_checks=1) == 2
     assert calls == [earlier, later]
+
+
+def test_dispatcher_lock_allows_only_one_local_process(tmp_path):
+    lock = acquire_dispatcher_lock(tmp_path)
+    assert lock is not None
+    assert acquire_dispatcher_lock(tmp_path) == lock
+    release_dispatcher_lock(lock)
+    assert not lock.exists()

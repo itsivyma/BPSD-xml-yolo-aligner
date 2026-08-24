@@ -4,6 +4,7 @@ import shutil
 import zipfile
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from bpsd_aligner.web_pipeline import (
@@ -145,6 +146,30 @@ def test_final_batch_uses_machine_time_only_as_hidden_sort_metadata(
         "later",
     ]
     assert all(row["start_meas"] == "" for row in result["final_rows"])
+
+
+def test_safe_identifier_is_collision_resistant_after_sanitizing() -> None:
+    from bpsd_aligner.web_pipeline import safe_identifier
+
+    assert safe_identifier("page-1", "page") == "page-1"
+    assert safe_identifier("page 1", "page") != safe_identifier(
+        "page-1", "page"
+    )
+    assert len(safe_identifier("x" * 200, "page")) <= 80
+
+
+def test_uploaded_alignment_rejects_box_crossing_image_boundary(tmp_path) -> None:
+    inputs = _write_uploads(tmp_path)
+    inputs["yolo_path"].write_text(
+        "18 0.99 0.30 0.04 0.04\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid normalized geometry"):
+        run_uploaded_alignment(
+            **inputs,
+            output_dir=tmp_path / "invalid-output",
+        )
 
 
 def test_uploaded_alignment_preserves_all_sources_and_renders_overlay(tmp_path):
