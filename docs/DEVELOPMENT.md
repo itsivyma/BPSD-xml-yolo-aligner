@@ -40,6 +40,10 @@ operator may override them through `BPSD_ALIGNER_THRESHOLDS`. Do not lower a
 threshold from a few examples. Build `review_training_rows.csv`, collect at
 least 200 reviewed rows across representative scores, and run
 `calibrate-thresholds` before proposing a change.
+`review-dataset` accepts either website `--corrections` JSON or normalized
+`--ground-truth` CSV; the two sources are mutually exclusive per invocation.
+Threshold readiness uses the 95% Wilson precision lower bound, not raw observed
+precision.
 
 ## Tests
 
@@ -61,6 +65,9 @@ bpsd-aligner regression-smoke \
 
 The semantic baseline detects endpoint, note-ID, staff, class, time, written
 measure and cross-page changes even when aggregate row counts are unchanged.
+`representative_pages.json` intentionally uses the 113-class test data. Run
+`finished_xia_pages.json` separately for the 162-class production data, and
+pass `--ground-truth` whenever reviewed truth is available.
 
 ## Refactoring rules
 

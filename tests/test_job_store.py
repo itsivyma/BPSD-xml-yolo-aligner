@@ -102,6 +102,7 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
         source,
         fingerprint=fingerprint,
         pipeline_version="v1",
+        code_signature="code-a",
         inputs=[],
     )
     write_job_status(
@@ -134,6 +135,7 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
         target,
         expected_fingerprint=fingerprint,
         expected_pipeline_version="v1",
+        expected_code_signature="code-a",
     )
     assert restored == 4
     assert (target / "outputs" / "pages" / "page.csv").is_file()
@@ -149,6 +151,14 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
             target,
             expected_fingerprint=fingerprint,
             expected_pipeline_version="v2",
+        )
+    with pytest.raises(ValueError, match="different alignment code"):
+        restore_job_checkpoint_archive(
+            archive.read_bytes(),
+            target,
+            expected_fingerprint=fingerprint,
+            expected_pipeline_version="v1",
+            expected_code_signature="code-b",
         )
 
 

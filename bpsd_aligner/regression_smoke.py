@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from bpsd_aligner import __version__
+from bpsd_aligner.provenance import alignment_runtime_identity
+from bpsd_aligner.review_corrections import evaluate_ground_truth_rows
 from bpsd_aligner.web_pipeline import prepare_score_sources, run_uploaded_alignment
 from pipeline_checkpoint import (
     atomic_write_csv,
@@ -79,33 +80,6 @@ SEMANTIC_ROW_FIELDS = (
     "end_xml_page",
     "cross_page_span_id",
 )
-
-
-def _pipeline_code_signature() -> str:
-    """Hash alignment source code so checkpoints cannot survive code changes."""
-
-    package_dir = Path(__file__).resolve().parent
-    source_paths = list(package_dir.glob("*.py"))
-    project_dir = package_dir.parent
-    source_paths.extend(
-        project_dir / name
-        for name in (
-            "bps_xml_alignment.py",
-            "combine_yolo_xml.py",
-            "dataset_dry_run.py",
-            "pipeline_checkpoint.py",
-            "repeat_mapping.py",
-            "xml_export.py",
-        )
-        if (project_dir / name).is_file()
-    )
-    digest = hashlib.sha256()
-    for path in sorted(set(source_paths), key=lambda value: str(value)):
-        digest.update(path.name.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -235,6 +209,24 @@ def load_regression_manifest(
             raise ValueError("unknown regression page_id: " + ", ".join(missing_ids))
     if not resolved:
         raise ValueError("regression manifest selected no pages")
+    expected_class_count = payload.get("expected_class_count")
+    if expected_class_count is not None:
+        try:
+            expected_class_count = int(expected_class_count)
+        except (TypeError, ValueError) as error:
+            raise ValueError("expected_class_count must be an integer") from error
+        notes_paths = {Path(item["notes_json"]) for item in resolved}
+        for notes_path in notes_paths:
+            notes_payload = json.loads(notes_path.read_text(encoding="utf-8"))
+            categories = notes_payload.get("categories", [])
+            if not isinstance(categories, list):
+                raise ValueError(f"{notes_path}: categories must be a list")
+            if len(categories) != expected_class_count:
+                raise ValueError(
+                    f"{notes_path}: expected {expected_class_count} classes for "
+                    f"profile {payload.get('dataset_profile', '(unnamed)')}, "
+                    f"found {len(categories)}"
+                )
     return payload, resolved
 
 
@@ -245,7 +237,7 @@ def _page_fingerprint(page: dict) -> str:
     return stable_digest(
         {
             "pipeline_version": __version__,
-            "pipeline_code_signature": _pipeline_code_signature(),
+            **alignment_runtime_identity(),
             "page": {
                 key: value
                 for key, value in page.items()
@@ -400,6 +392,7 @@ def run_regression_smoke(
     page_ids: set[str] | None = None,
     baseline_path: Path | None = None,
     update_baseline: bool = False,
+    ground_truth_path: Path | None = None,
 ) -> dict:
     """Run selected real pages, checkpointing after every completed page."""
 
@@ -480,7 +473,7 @@ def run_regression_smoke(
             checkpoint_path,
             {
                 "pipeline_version": __version__,
-                "pipeline_code_signature": _pipeline_code_signature(),
+                **alignment_runtime_identity(),
                 "fingerprint": fingerprint,
                 "status": "completed" if summary["passed"] else "failed",
                 "summary": summary,
@@ -515,7 +508,7 @@ def run_regression_smoke(
                 {
                     "schema_version": "1.0",
                     "pipeline_version": __version__,
-                    "pipeline_code_signature": _pipeline_code_signature(),
+                    **alignment_runtime_identity(),
                     "pages": pages_snapshot,
                 },
             )
@@ -525,12 +518,34 @@ def run_regression_smoke(
     else:
         baseline_warning = "no baseline found; run once with --update-baseline"
 
+    ground_truth_report = None
+    ground_truth_errors: list[str] = []
+    if ground_truth_path is not None:
+        ground_truth_path = ground_truth_path.expanduser().resolve()
+        ground_truth_rows = _read_csv(ground_truth_path)
+        prediction_rows = []
+        for summary in summaries:
+            detailed_path = Path(str(summary.get("detailed_csv", "")))
+            if not detailed_path.is_file():
+                continue
+            for row in _read_csv(detailed_path):
+                row["page_id"] = row.get("page_id") or summary["page_id"]
+                prediction_rows.append(row)
+        ground_truth_report, ground_truth_errors = evaluate_ground_truth_rows(
+            ground_truth_rows, prediction_rows
+        )
+        ground_truth_report["ground_truth_file"] = str(ground_truth_path)
+        ground_truth_report_path = output_dir / "ground_truth_accuracy.json"
+        atomic_write_json(ground_truth_report_path, ground_truth_report)
+
     report = {
         "schema_version": "1.0",
         "pipeline_version": __version__,
-        "pipeline_code_signature": _pipeline_code_signature(),
+        **alignment_runtime_identity(),
         "manifest": str(Path(manifest_path).expanduser().resolve()),
         "manifest_name": payload.get("name", ""),
+        "dataset_profile": payload.get("dataset_profile", "unspecified"),
+        "expected_class_count": payload.get("expected_class_count"),
         "selected_pages": [page["page_id"] for page in pages],
         "page_count": len(summaries),
         "resumed_pages": resumed_pages,
@@ -539,7 +554,13 @@ def run_regression_smoke(
         "baseline": str(baseline_path),
         "baseline_warning": baseline_warning,
         "baseline_differences": baseline_differences,
-        "passed": not page_failures and not baseline_differences,
+        "ground_truth": ground_truth_report,
+        "ground_truth_errors": ground_truth_errors,
+        "passed": (
+            not page_failures
+            and not baseline_differences
+            and not ground_truth_errors
+        ),
         "outputs": {"summary_csv": str(summary_path)},
     }
     report_path = output_dir / "regression_report.json"
@@ -568,6 +589,11 @@ def main() -> None:
         help="Reuse passing page checkpoints whose inputs have not changed.",
     )
     parser.add_argument(
+        "--ground-truth",
+        type=Path,
+        help="Optional normalized human ground-truth CSV to score against.",
+    )
+    parser.add_argument(
         "--update-baseline",
         action="store_true",
         help="Record current passing metrics as the expected regression baseline.",
@@ -581,6 +607,7 @@ def main() -> None:
         resume=args.resume,
         page_ids=set(args.page_ids) if args.page_ids else None,
         update_baseline=args.update_baseline,
+        ground_truth_path=args.ground_truth,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if not report["passed"]:

@@ -34,7 +34,11 @@ candidates that the system refuses to invent values for.
 
 - Unit tests cover parsers, repeat mapping, matching, exports, web helpers,
   Review corrections, persistence and security controls.
-- `regression/representative_pages.json` selects ten varied real pages.
+- `regression/representative_pages.json` selects ten varied pages from the
+  legacy/test `Xia/` 113-class profile.
+- `regression/finished_xia_pages.json` selects the same coverage from the
+  production `finished/Xia/` 162-class profile. It intentionally has no
+  committed baseline until its output is human reviewed.
 - `regression/representative_baseline.json` stores reviewed aggregate and
   row-level semantic fingerprints.
 
@@ -43,8 +47,11 @@ Never update the baseline until a human has verified the changed assignments.
 ## Recommended next work
 
 1. Continue decomposing `bps_xml_alignment.py`. Geometry, rendering and generic
-   candidate scoring are now isolated; point and span matchers remain.
-2. Decompose `web.py` into upload, job status, results and Review components.
+   candidate scoring are isolated; point and span matchers remain behind the
+   compatibility facade.
+2. Continue decomposing `web.py` into upload, job status and result renderers.
+   Framework-independent Review selection/input logic is already in
+   `review_workspace.py`, and the UI no longer imports the matcher directly.
 3. Replace cross-module row dictionaries with typed domain records at stable
    boundaries.
 4. Collect 200–500 representative human decisions and calibrate thresholds by
@@ -52,6 +59,10 @@ Never update the baseline until a human has verified the changed assignments.
 5. If enough labels accumulate, train an optional relation/ranking model that
    predicts the XML note/span candidate; retain rule evidence and human Review.
 6. Add CI for unit tests, package installation and a public-data smoke fixture.
+
+On Python 3.14, use the documented regular `pip install ".[dev]"`. Some
+setuptools releases generate a hidden editable `.pth` that Python 3.14 skips;
+this does not affect the regular wheel installation used by end users.
 
 ## Production handoff
 

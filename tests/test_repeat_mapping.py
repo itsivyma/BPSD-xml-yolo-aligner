@@ -144,3 +144,26 @@ def test_sibelius_combined_first_and_second_ending_stays_local(
     assert measure_four["volta_numbers"] == "[1]"
     assert measure_five["volta_numbers"] == "[1, 2]"
     assert measure_six["volta_numbers"] == "[]"
+
+
+def test_navigation_markers_are_reported_without_guessing_performance_order(
+    tmp_path: Path,
+) -> None:
+    path = _write_score(
+        tmp_path,
+        """
+        <measure number="1"><direction><direction-type><segno/></direction-type></direction></measure>
+        <measure number="2"><direction><sound dalsegno="segno" tocoda="coda"/></direction></measure>
+        <measure number="3"><direction><direction-type><coda/></direction-type><sound fine="yes"/></direction></measure>
+        <measure number="4"><direction><sound dacapo="yes"/></direction></measure>
+        """,
+    )
+
+    report = build_repeat_mapping(path)
+
+    assert [row["written_measure_index"] for row in report["rows"]] == [1, 2, 3, 4]
+    warning = " ".join(report["structural_warnings"])
+    assert all(
+        marker in warning
+        for marker in ("dacapo", "dalsegno", "tocoda", "fine", "segno", "coda")
+    )

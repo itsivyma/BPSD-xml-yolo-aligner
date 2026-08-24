@@ -73,6 +73,10 @@ bpsd-aligner regression-smoke \
   --resume
 ```
 
+上面是既有 `Xia/` 113-class 測試回歸。正式 `finished/Xia/` 162-class
+資料請改用 `regression/finished_xia_pages.json`，不要覆蓋前者；若已有人工
+答案，再加 `--ground-truth /path/to/evaluation_ground_truth.csv`。
+
 只有在人工確認結果變更是正確的情況下，才能加
 `--update-baseline`。不要為了讓測試變綠而直接更新 baseline。
 

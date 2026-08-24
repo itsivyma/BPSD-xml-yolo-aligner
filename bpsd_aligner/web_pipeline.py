@@ -1099,6 +1099,138 @@ def _sanitize_xml_source_paths(rows: list[dict], source_name: str) -> None:
             row["source_xml_path"] = source_name
 
 
+def finalize_uploaded_batch(
+    *,
+    score_id: str,
+    pages: list[int],
+    page_reports: list[dict],
+    final_entries: list[tuple[int, int, dict]],
+    yolo_entries: list[tuple[int, int, dict]],
+    detailed_rows: list[dict],
+    xml_events: list[dict],
+    xml_nodes: list[dict],
+    output_dir: Path,
+    overlays: dict,
+    review_candidate_rows: list[dict] | None = None,
+    review_candidate_set_rows: list[dict] | None = None,
+) -> dict:
+    """Build identical durable outputs for foreground and background jobs."""
+
+    from bpsd_aligner.review_candidates import (
+        CANDIDATE_FIELDS,
+        CANDIDATE_SET_FIELDS,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    def entry_sort_key(entry: tuple[int, int, dict]) -> tuple[float, int, int]:
+        page, row_index, row = entry
+        try:
+            start = float(row.get("start_meas", ""))
+        except (TypeError, ValueError):
+            start = float("inf")
+        return start, page, row_index
+
+    final_rows = [entry[2] for entry in sorted(final_entries, key=entry_sort_key)]
+    yolo_rows = [entry[2] for entry in sorted(yolo_entries, key=entry_sort_key)]
+    final_path = output_dir / "bps_omr_final.csv"
+    detailed_path = output_dir / "page_alignment_detailed.csv"
+    candidates_path = output_dir / "review_note_candidates.csv"
+    candidate_sets_path = output_dir / "review_candidate_sets.csv"
+    atomic_write_csv(final_path, FINAL_BPS_FIELDS, final_rows)
+    disk_detailed_rows = []
+    for row in detailed_rows:
+        prepared = dict(row)
+        prepared["review_note_candidates_json"] = ""
+        disk_detailed_rows.append(prepared)
+    detailed_fields = list(
+        dict.fromkeys(field for row in disk_detailed_rows for field in row)
+    )
+    atomic_write_csv(detailed_path, detailed_fields, disk_detailed_rows)
+    atomic_write_csv(
+        candidates_path, CANDIDATE_FIELDS, review_candidate_rows or []
+    )
+    atomic_write_csv(
+        candidate_sets_path,
+        CANDIDATE_SET_FIELDS,
+        review_candidate_set_rows or [],
+    )
+    complete = build_batch_information_outputs(
+        yolo_rows=yolo_rows,
+        xml_events=xml_events,
+        xml_nodes=xml_nodes,
+        output_dir=output_dir / "complete_exports",
+    )
+    errors = [
+        error
+        for page_report in page_reports
+        for error in page_report.get("validation_errors", [])
+    ] + list(complete["validation_errors"])
+    warnings = list(
+        dict.fromkeys(
+            warning
+            for page_report in page_reports
+            for warning in page_report.get("warnings", [])
+        )
+    )
+    counts = Counter(row.get("status", "") for row in detailed_rows)
+    report = {
+        "pipeline_version": PIPELINE_VERSION,
+        "score_id": score_id,
+        "page_count": len(pages),
+        "pages": pages,
+        "alignment_rows": len(final_rows),
+        "xml_event_rows": complete["xml_event_rows"],
+        "xml_node_rows": complete["xml_node_rows"],
+        "timeline_rows": complete["timeline_rows"],
+        "all_information_rows": complete["all_information_rows"],
+        "xml_span_rows": complete["xml_span_rows"],
+        "performance_expanded_rows": complete["performance_expanded_rows"],
+        "confirmed_rows": counts.get("matched", 0),
+        "human_corrected_rows": sum(
+            row.get("human_corrected") == "1" for row in final_rows
+        ),
+        "yolo_rows_needing_review": len(final_rows) - counts.get("matched", 0),
+        "yolo_status_counts": dict(counts),
+        "class_overlay_count": sum(
+            page_report.get("class_overlay_count", 0) for page_report in page_reports
+        ),
+        "clean_reference_pages_used": sum(
+            bool(page_report.get("clean_reference", {}).get("used"))
+            for page_report in page_reports
+        ),
+        "warnings": warnings,
+        "validation_errors": errors,
+        "passed": not errors,
+        "final_csv_fields": FINAL_BPS_FIELDS,
+        "empty_value_policy": "uncertain, unavailable, and not-applicable values are blank",
+    }
+    report_path = output_dir / "validation_report.json"
+    atomic_write_json(report_path, report)
+    zip_path = output_dir / "all_outputs.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.write(final_path, arcname=final_path.name)
+        archive.write(report_path, arcname=report_path.name)
+        for path in complete["outputs"].values():
+            archive.write(path, arcname=f"complete_exports/{Path(path).name}")
+        for name, value in overlays.items():
+            if isinstance(value, (str, Path)):
+                archive.write(value, arcname=f"review_images/{name}.png")
+            else:
+                archive.writestr(f"review_images/{name}.png", value)
+    return {
+        "report": report,
+        "final_rows": final_rows,
+        "yolo_rows": yolo_rows,
+        "complete": complete,
+        "final_path": final_path,
+        "detailed_path": detailed_path,
+        "review_candidates_path": candidates_path,
+        "review_candidate_sets_path": candidate_sets_path,
+        "report_path": report_path,
+        "zip_path": zip_path,
+    }
+
+
 def run_uploaded_alignment(
     *,
     image_path: Path,
@@ -1315,6 +1447,12 @@ def run_uploaded_alignment(
     outputs = {
         "official_csv": Path(alignment_report["outputs"]["csv"]),
         "detailed_csv": detailed_path,
+        "review_note_candidates_csv": Path(
+            alignment_report["outputs"]["review_note_candidates_csv"]
+        ),
+        "review_candidate_sets_csv": Path(
+            alignment_report["outputs"]["review_candidate_sets_csv"]
+        ),
         "final_bps_csv": final_bps_path,
         "yolo_aligned_csv": yolo_aligned_path,
         "review_queue_csv": review_queue_path,

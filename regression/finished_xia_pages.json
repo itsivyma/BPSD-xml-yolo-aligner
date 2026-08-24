@@ -1,13 +1,13 @@
 {
   "schema_version": "1.0",
-  "name": "BPSD legacy/test 113-class real-page smoke suite",
-  "dataset_profile": "legacy_xia_113_class",
-  "expected_class_count": 113,
+  "name": "BPSD production finished/Xia 162-class real-page suite",
+  "dataset_profile": "finished_xia_162_class",
+  "expected_class_count": 162,
   "dataset_root": ".",
   "paths": {
-    "notes_json": "Xia/notes.json",
-    "image": "Xia/images/{page_id}.jpeg",
-    "yolo": "Xia/labels/{page_id}.txt",
+    "notes_json": "finished/Xia/notes.json",
+    "image": "finished/Xia/images/{page_id}.jpeg",
+    "yolo": "finished/Xia/labels/{page_id}.txt",
     "xml_repetitions": "Beethoven_Piano_Sonata_Dataset_v2/0_RawData/score_xml_repetitions/{score_id}.xml",
     "xml_unfolded": "Beethoven_Piano_Sonata_Dataset_v2/0_RawData/score_xml_unfolded/{score_id}.xml",
     "bps_notes": "Beethoven_Piano_Sonata_Dataset_v2/2_Annotations/ann_score_note/{score_id}.csv"

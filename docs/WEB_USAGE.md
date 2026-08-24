@@ -101,12 +101,14 @@ preprocessing, and every completed or resumed page. It records the current
 stage, completed/total pages, timestamps, and a failure message when relevant.
 This makes server-side diagnosis possible even when the browser disconnects.
 
-Multi-page uploads run in an independent background worker by default. Closing
-the browser does not terminate that worker. While the page is open, status
+Multi-page uploads enter a persistent on-disk queue drained by one dispatcher;
+queued jobs no longer each hold a waiting Python process. Closing the browser
+does not terminate the active worker. While the page is open, status
 refreshes every two seconds and completed outputs load automatically after the
 durable result has been finalized. **Refresh background status** remains
-available as a manual fallback. Jobs wait for a configured worker slot instead
-of failing immediately. Cancellation is cooperative: **Request cancellation**
+available as a manual fallback. Jobs stay queued until the dispatcher has
+capacity instead of failing immediately. Configured retention cleanup runs
+between jobs. Cancellation is cooperative: **Request cancellation**
 stops the job before the next page, without deleting completed page
 checkpoints.
 
@@ -231,6 +233,18 @@ bpsd-aligner review-dataset \
   --corrections /path/to/human_corrections.json \
   --output-dir /path/to/review-dataset
 ```
+
+Or use the normalized ground truth produced by `review-eval` directly:
+
+```bash
+bpsd-aligner review-dataset \
+  --predictions /path/to/page_alignment_detailed.csv \
+  --ground-truth /path/to/evaluation_ground_truth.csv \
+  --output-dir /path/to/review-dataset
+```
+
+Only `confirmed` rows become calibration labels. Blank expected values remain
+unknown and do not count as errors.
 
 After accumulating at least 200 reviewed rows across representative scores:
 

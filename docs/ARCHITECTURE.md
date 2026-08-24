@@ -51,8 +51,13 @@ BPSD note CSV ──────── official time and note IDs ────�
 | `xml_export.py` | Lossless MusicXML nodes/events export |
 | `combine_yolo_xml.py` | Lossless XML + YOLO research tables |
 | `bpsd_aligner/web_pipeline.py` | Shared-score preprocessing and multi-page orchestration |
-| `bpsd_aligner/web.py` | Streamlit presentation and Review workspace |
+| `bpsd_aligner/web.py` | Streamlit presentation and Review controller; no direct matcher import |
 | `bpsd_aligner/job_store.py` | Atomic jobs, progress, ownership and checkpoints |
+| `bpsd_aligner/job_dispatcher.py` | Durable queue dispatcher; no process per waiting job |
+| `bpsd_aligner/provenance.py` | Shared source-code signature for cache invalidation |
+| `bpsd_aligner/musicxml.py` | Secure namespace-independent MusicXML primitives |
+| `bpsd_aligner/review_candidates.py` | Normalized clickable-note tables and UI hydration |
+| `bpsd_aligner/review_workspace.py` | Pure note labels, typed input resolution and click snapping |
 | `bpsd_aligner/review_corrections.py` | Review validation and corrected output rebuilding |
 | `bpsd_aligner/class_registry.py` | Stable class family, timeline and threshold defaults |
 | `bpsd_aligner/bps_omr_schema.py` | Compatibility entry point for final CSV semantics |
@@ -69,7 +74,8 @@ BPSD note CSV ──────── official time and note IDs ────�
   alone is not a unique performance time.
 - A machine candidate may be visible in Review without being accepted in the
   strict final CSV.
-- Review data is bound to input fingerprint, pipeline version, score and owner.
+- Review data is bound to input fingerprint, pipeline version, source-code
+  signature, score and owner.
 - Completed page checkpoints are atomic and reusable only when inputs and code
   signatures still match.
 

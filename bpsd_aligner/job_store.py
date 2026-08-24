@@ -105,6 +105,7 @@ def write_job_manifest(
     *,
     fingerprint: str,
     pipeline_version: str,
+    code_signature: str = "",
     inputs: list[dict],
     owner_id: str = "",
 ) -> Path:
@@ -116,6 +117,7 @@ def write_job_manifest(
             "job_id": fingerprint,
             "owner_id": owner_id,
             "pipeline_version": pipeline_version,
+            "code_signature": code_signature,
             "inputs": inputs,
         },
     )
@@ -129,6 +131,7 @@ def _validated_job_manifest(
     fingerprint: str,
     pipeline_version: str,
     owner_id: str,
+    code_signature: str = "",
 ) -> dict:
     """Load the immutable identity fields used to protect persisted review data."""
 
@@ -141,6 +144,8 @@ def _validated_job_manifest(
         raise ValueError("review state belongs to different uploaded inputs")
     if manifest.get("pipeline_version") != pipeline_version:
         raise ValueError("review state belongs to a different pipeline version")
+    if code_signature and manifest.get("code_signature") != code_signature:
+        raise ValueError("review state belongs to different alignment code")
     if str(manifest.get("owner_id", "")) != str(owner_id):
         raise ValueError("review state belongs to a different authenticated user")
     return manifest
@@ -495,6 +500,7 @@ def restore_job_checkpoint_archive(
     *,
     expected_fingerprint: str,
     expected_pipeline_version: str | None = None,
+    expected_code_signature: str | None = None,
     max_uncompressed_bytes: int = 2 * 1024 * 1024 * 1024,
 ) -> int:
     """Safely restore a portable checkpoint archive into its fingerprinted job."""
@@ -513,6 +519,11 @@ def restore_job_checkpoint_archive(
             raise ValueError(
                 "checkpoint ZIP was created by a different pipeline version"
             )
+        if (
+            expected_code_signature is not None
+            and manifest.get("code_signature") != expected_code_signature
+        ):
+            raise ValueError("checkpoint ZIP was created by different alignment code")
         members = [member for member in archive.infolist() if not member.is_dir()]
         total = sum(member.file_size for member in members)
         if total > max_uncompressed_bytes:
