@@ -8,6 +8,8 @@ import re
 from collections import Counter
 from pathlib import PurePath
 
+from bpsd_aligner.csv_io import read_csv_bytes
+
 
 def upload_destination(
     directory: PurePath,
@@ -179,12 +181,6 @@ def apply_page_number_edits(page_pairs: list[dict], edited_rows: list[dict]) -> 
     """Backward-compatible wrapper for callers editing only XML page numbers."""
 
     return apply_page_mapping_edits(page_pairs, edited_rows)
-
-
-def read_csv_bytes(data: bytes) -> tuple[list[str], list[dict[str, str]]]:
-    text = data.decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(text))
-    return list(reader.fieldnames or []), list(reader)
 
 
 def summarize_rows(rows: list[dict[str, str]]) -> dict[str, object]:

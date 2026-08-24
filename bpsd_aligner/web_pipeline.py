@@ -14,8 +14,13 @@ from typing import Callable
 from PIL import Image
 
 from bpsd_aligner import __version__ as PIPELINE_VERSION
+from bpsd_aligner.csv_io import read_csv_rows
 from bpsd_aligner.bps_omr_schema import musical_time_for_class
 from bpsd_aligner.span_semantics import endpoint_note_ids, index_chord_members
+from bpsd_aligner.schema import (
+    FINAL_BPS_FIELDS,
+    FINAL_UNCERTAIN_FIELDS,
+)
 from bps_xml_alignment import (
     load_bps_notes,
     load_categories,
@@ -32,19 +37,6 @@ from xml_export import BPS_FIELDS, EVENT_FIELDS, NODE_FIELDS, export_score
 
 MAX_DECODED_IMAGE_PIXELS = 100_000_000
 ProgressCallback = Callable[[int, int, str], None]
-FINAL_BPS_FIELDS = [
-    *OFFICIAL_FIELDS,
-    "human_corrected",
-    "is_repeated_measure",
-]
-FINAL_UNCERTAIN_FIELDS = [
-    "start_meas",
-    "end_meas",
-    "start_note",
-    "end_note",
-    "connected_note",
-    "stem_dir",
-]
 XML_SPAN_FIELDS = [
     "span_id",
     "score_id",
@@ -111,8 +103,7 @@ def _sha256(path: Path) -> str:
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8-sig") as file:
-        return list(csv.DictReader(file))
+    return read_csv_rows(path)
 
 
 def _time_sort_key(row: dict) -> tuple:

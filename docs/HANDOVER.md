@@ -4,8 +4,8 @@
 
 The system supports multi-page image/TXT upload, repetition and unfolded
 MusicXML, BPSD note annotations, YOLO class maps, optional clean repetition
-PDF, background jobs, progress, checkpoint/resume, strict BPS-OMR CSV, complete
-diagnostic exports, overlays and an image-first human Review workspace.
+PDF, background jobs, progress, signed checkpoint/resume, strict BPS-OMR CSV,
+on-demand class overlays and an image-first human Review workspace.
 
 Review can correct classes, point symbols and span endpoints by typed values or
 clicking score noteheads. Cross-page spans display both endpoint pages when
@@ -64,7 +64,8 @@ Never update the baseline until a human has verified the changed assignments.
    class family.
 5. If enough labels accumulate, train an optional relation/ranking model that
    predicts the XML note/span candidate; retain rule evidence and human Review.
-6. Add CI for unit tests, package installation and a public-data smoke fixture.
+6. Replace the local token gate with organization SSO/OIDC when the deployment
+   becomes a public multi-user service.
 
 On Python 3.14, use the documented regular `pip install ".[dev]"`. Some
 setuptools releases generate a hidden editable `.pth` that Python 3.14 skips;
@@ -72,12 +73,14 @@ this does not affect the regular wheel installation used by end users.
 
 ## Production handoff
 
-Before exposing a shared website:
+The repository now enforces production authentication, private job permissions,
+signed checkpoints, upload/PDF/ZIP limits, storage quota and default retention.
+Before exposing a shared website, additionally:
 
-- configure per-user tokens;
+- place the service behind HTTPS and preferably SSO/OIDC;
 - mount `BPSD_ALIGNER_JOB_DIR` on persistent storage;
 - set upload/page/storage limits;
-- schedule `bpsd-aligner job-admin prune`;
+- verify the configured automatic retention and backup policy;
 - protect logs and outputs as annotation data;
 - monitor failed jobs and disk usage;
 - document backup and retention policy.
