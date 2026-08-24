@@ -13,6 +13,7 @@ from bpsd_aligner.review_corrections import (
     normalize_legacy_review_rows,
     render_review_endpoint_images,
     render_review_focus_images,
+    stratified_matched_sample,
 )
 
 
@@ -253,6 +254,24 @@ def test_review_queue_filters_and_prioritizes_unreviewed_low_confidence():
     assert [row["review_key"] for row in build_review_queue(
         [first, second, third], machine_status="matched", include_matched=True
     )] == ["page-01:Y3"]
+
+
+def test_matched_spot_check_is_deterministic_and_class_balanced():
+    rows = [
+        _detail(index, class_name, "matched", str(index), str(index))
+        for class_name in ("slur", "tie")
+        for index in range(1, 6)
+    ]
+
+    first = stratified_matched_sample(rows, per_class=2)
+    second = stratified_matched_sample(list(reversed(rows)), per_class=2)
+
+    assert [(row["class"], row["txt_line"]) for row in first] == [
+        (row["class"], row["txt_line"]) for row in second
+    ]
+    assert len(first) == 4
+    assert {class_name: sum(row["class"] == class_name for row in first)
+            for class_name in ("slur", "tie")} == {"slur": 2, "tie": 2}
 
 
 def test_render_review_focus_images_keeps_native_pixels_and_highlights_bbox():
