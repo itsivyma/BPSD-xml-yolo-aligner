@@ -2835,6 +2835,8 @@ def _small_accidental_compatible(class_name: str, note: dict) -> bool:
 
 
 def _duration_end(row: dict, members: list[dict]) -> None:
+    """Use sounding duration for symbols whose semantics cover a full note."""
+
     ends = [
         float(member["end_bps_time"])
         for member in members
@@ -3965,6 +3967,39 @@ def match_xml_spans(
     """Match YOLO slur/tie boxes to paired MusicXML endpoints."""
 
     systems_by_number = {system.number: system for system in systems}
+    chord_members: dict[tuple[int, int, int], list[dict]] = defaultdict(list)
+    for note in xml_notes:
+        chord_sequence = note.get("xml_chord_sequence")
+        if chord_sequence is None:
+            continue
+        chord_members[
+            (
+                int(note.get("system", 0)),
+                int(note.get("staff", 1)),
+                int(chord_sequence),
+            )
+        ].append(note)
+
+    def slur_chord_members(note: dict) -> list[dict]:
+        """Return every note in the endpoint chord selected by a slur."""
+
+        chord_sequence = note.get("xml_chord_sequence")
+        if chord_sequence is None:
+            return [note]
+        key = (
+            int(note.get("system", 0)),
+            int(note.get("staff", 1)),
+            int(chord_sequence),
+        )
+        return sorted(
+            chord_members.get(key, [note]),
+            key=lambda member: (
+                int(member.get("note_id"))
+                if member.get("note_id") is not None
+                else int(member.get("xml_note_sequence", 0))
+            ),
+        )
+
     targets_by_class: dict[str, list[dict]] = defaultdict(list)
     slurs, _slur_issues = build_slur_candidates(xml_notes, bps_notes)
     ties, _tie_issues = build_tie_candidates(xml_notes, bps_notes)
@@ -4006,8 +4041,18 @@ def match_xml_spans(
                 )
             if start is None or end is None:
                 continue
-            start_anchor = _anchor(start, systems_by_number, measure_x_maps)
-            end_anchor = _anchor(end, systems_by_number, measure_x_maps)
+            start_anchor = _anchor(
+                start,
+                systems_by_number,
+                measure_x_maps,
+                members=(slur_chord_members(start) if class_name == "slur" else None),
+            )
+            end_anchor = _anchor(
+                end,
+                systems_by_number,
+                measure_x_maps,
+                members=(slur_chord_members(end) if class_name == "slur" else None),
+            )
             if note_x_overrides:
                 start_sequence = start.get("xml_note_sequence")
                 end_sequence = end.get("xml_note_sequence")
@@ -4150,26 +4195,32 @@ def match_xml_spans(
                 )
                 else "review"
             )
-            output.append(
-                _row_from_anchors(
-                    box,
-                    target["start"],
-                    target["end"],
-                    match_source=(
-                        f"musicxml_slur_{target.get('segment_type', 'full')}_endpoint_candidate"
-                        + ("_ambiguous_bps_unison" if note_id_ambiguous else "")
-                        if class_name == "slur"
-                        else "musicxml_tie_endpoints"
-                        + ("_ambiguous_bps_unison" if note_id_ambiguous else "")
-                    ),
-                    confidence=confidence,
-                    status=status,
-                    xml_symbol=class_name,
-                    geometry_score=confidence,
-                    candidate_margin=margin,
-                    xml_time_confirmed=confirmed,
-                )
+            row = _row_from_anchors(
+                box,
+                target["start"],
+                target["end"],
+                match_source=(
+                    f"musicxml_slur_{target.get('segment_type', 'full')}_endpoint_candidate"
+                    + ("_ambiguous_bps_unison" if note_id_ambiguous else "")
+                    if class_name == "slur"
+                    else "musicxml_tie_endpoints"
+                    + ("_ambiguous_bps_unison" if note_id_ambiguous else "")
+                ),
+                confidence=confidence,
+                status=status,
+                xml_symbol=class_name,
+                geometry_score=confidence,
+                candidate_margin=margin,
+                xml_time_confirmed=confirmed,
             )
+            # connected_note contains every note in both endpoint chords for a
+            # slur, while start_note/end_note continue to identify the exact
+            # MusicXML noteheads carrying the slur marks.  A tie is pitch-
+            # specific and therefore deliberately remains a two-note span.
+            if class_name == "slur":
+                row["start_note"] = target["start"]["event"].get("note_id", "")
+                row["end_note"] = target["end"]["event"].get("note_id", "")
+            output.append(row)
     return output
 
 
@@ -4246,7 +4297,7 @@ def match_tuplets(
         end["members"] = []
         semantic_complete = all(
             member.get("note_id") is not None
-            and member.get("end_bps_time") is not None
+            and member.get("bps_time") is not None
             for member in group["members"]
         )
         row = _row_from_anchors(
@@ -4269,7 +4320,6 @@ def match_tuplets(
                 count_agreement=count_agreement,
                 xml_time_confirmed=semantic_complete,
             )
-        _duration_end(row, group["members"])
         output.append(
             row
         )

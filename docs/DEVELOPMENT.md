@@ -67,7 +67,8 @@ The semantic baseline detects endpoint, note-ID, staff, class, time, written
 measure and cross-page changes even when aggregate row counts are unchanged.
 `representative_pages.json` intentionally uses the 113-class test data. Run
 `finished_xia_pages.json` separately for the 162-class production data, and
-pass `--ground-truth` whenever reviewed truth is available.
+compare it with `finished_xia_baseline.json`. Pass `--ground-truth` whenever
+reviewed row-level truth is available.
 
 ## Refactoring rules
 

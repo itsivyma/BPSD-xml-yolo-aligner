@@ -37,10 +37,12 @@ candidates that the system refuses to invent values for.
 - `regression/representative_pages.json` selects ten varied pages from the
   legacy/test `Xia/` 113-class profile.
 - `regression/finished_xia_pages.json` selects the same coverage from the
-  production `finished/Xia/` 162-class profile. It intentionally has no
-  committed baseline until its output is human reviewed.
+  production `finished/Xia/` 162-class profile.
 - `regression/representative_baseline.json` stores reviewed aggregate and
   row-level semantic fingerprints.
+- `regression/finished_xia_baseline.json` stores the human-accepted production
+  semantic fingerprints, including the reviewed tuplet endpoints and complete
+  slur endpoint chords.
 
 Never update the baseline until a human has verified the changed assignments.
 
