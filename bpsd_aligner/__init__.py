@@ -11,4 +11,4 @@ import sys
 CSV_FIELD_SIZE_LIMIT = 16 * 1024 * 1024
 csv.field_size_limit(min(sys.maxsize, CSV_FIELD_SIZE_LIMIT))
 
-__version__ = "0.3.2"
+__version__ = "0.6.0"

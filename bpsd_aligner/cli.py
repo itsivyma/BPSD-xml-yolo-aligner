@@ -15,6 +15,10 @@ COMMANDS = {
     "batch-align": ("batch_align", "Align a score page range"),
     "inventory": ("dataset_inventory", "Build dataset manifests"),
     "dry-run": ("dataset_dry_run", "Run resumable dataset alignment"),
+    "regression-smoke": (
+        "bpsd_aligner.regression_smoke",
+        "Run a resumable real-page regression suite",
+    ),
     "xml-export": ("xml_export", "Export every MusicXML event to CSV"),
     "combine": ("combine_yolo_xml", "Build a lossless XML + YOLO CSV"),
     "review-queue": ("build_review_queue", "Build a human-review queue"),
@@ -25,6 +29,18 @@ COMMANDS = {
     "review-eval": (
         "bpsd_aligner.review_corrections",
         "Normalize human evaluation ground truth",
+    ),
+    "review-dataset": (
+        "bpsd_aligner.review_dataset",
+        "Build calibration/training rows from website reviews",
+    ),
+    "calibrate-thresholds": (
+        "bpsd_aligner.calibrate_thresholds",
+        "Recommend thresholds from reviewed alignment rows",
+    ),
+    "job-admin": (
+        "bpsd_aligner.job_admin",
+        "Inspect or prune persisted website jobs",
     ),
     "worker": (
         "bpsd_aligner.web_worker",

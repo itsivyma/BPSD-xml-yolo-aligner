@@ -101,7 +101,12 @@ def validate_page_count(page_count: int, *, max_pages: int | None = None) -> int
 
 
 def write_job_manifest(
-    job_dir: Path, *, fingerprint: str, pipeline_version: str, inputs: list[dict]
+    job_dir: Path,
+    *,
+    fingerprint: str,
+    pipeline_version: str,
+    inputs: list[dict],
+    owner_id: str = "",
 ) -> Path:
     path = job_dir / "job_manifest.json"
     atomic_write_json(
@@ -109,11 +114,129 @@ def write_job_manifest(
         {
             "schema_version": "1.0",
             "job_id": fingerprint,
+            "owner_id": owner_id,
             "pipeline_version": pipeline_version,
             "inputs": inputs,
         },
     )
     os.utime(job_dir, None)
+    return path
+
+
+def _validated_job_manifest(
+    job_dir: Path,
+    *,
+    fingerprint: str,
+    pipeline_version: str,
+    owner_id: str,
+) -> dict:
+    """Load the immutable identity fields used to protect persisted review data."""
+
+    path = job_dir / "job_manifest.json"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError) as error:
+        raise ValueError("job manifest is missing or invalid") from error
+    if manifest.get("job_id") != fingerprint or job_dir.name != fingerprint:
+        raise ValueError("review state belongs to different uploaded inputs")
+    if manifest.get("pipeline_version") != pipeline_version:
+        raise ValueError("review state belongs to a different pipeline version")
+    if str(manifest.get("owner_id", "")) != str(owner_id):
+        raise ValueError("review state belongs to a different authenticated user")
+    return manifest
+
+
+def write_review_state(
+    job_dir: Path,
+    *,
+    fingerprint: str,
+    pipeline_version: str,
+    owner_id: str,
+    score_id: str,
+    reviewer: str,
+    decisions: dict,
+) -> Path:
+    """Atomically persist workspace decisions after every explicit save action."""
+
+    _validated_job_manifest(
+        job_dir,
+        fingerprint=fingerprint,
+        pipeline_version=pipeline_version,
+        owner_id=owner_id,
+    )
+    if not isinstance(decisions, dict):
+        raise ValueError("review decisions must be an object keyed by review item")
+    path = job_dir / "review_state.json"
+    atomic_write_json(
+        path,
+        {
+            "schema_version": "1.0",
+            "alignment_fingerprint": fingerprint,
+            "owner_id": owner_id,
+            "score_id": score_id,
+            "pipeline_version": pipeline_version,
+            "reviewer": reviewer.strip() or "User",
+            "decisions": decisions,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    os.utime(job_dir, None)
+    return path
+
+
+def load_review_state(
+    job_dir: Path,
+    *,
+    fingerprint: str,
+    pipeline_version: str,
+    owner_id: str,
+    score_id: str,
+) -> dict | None:
+    """Restore authenticated review data, rejecting stale or cross-user state."""
+
+    path = job_dir / "review_state.json"
+    if not path.is_file():
+        return None
+    _validated_job_manifest(
+        job_dir,
+        fingerprint=fingerprint,
+        pipeline_version=pipeline_version,
+        owner_id=owner_id,
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError) as error:
+        raise ValueError("persisted review state is invalid JSON") from error
+    expected = {
+        "schema_version": "1.0",
+        "alignment_fingerprint": fingerprint,
+        "owner_id": owner_id,
+        "score_id": score_id,
+        "pipeline_version": pipeline_version,
+    }
+    mismatched = [name for name, value in expected.items() if payload.get(name) != value]
+    if mismatched:
+        raise ValueError(
+            "persisted review state identity mismatch: " + ", ".join(mismatched)
+        )
+    if not isinstance(payload.get("decisions"), dict):
+        raise ValueError("persisted review decisions must be an object")
+    return payload
+
+
+def append_job_event(job_dir: Path, event: dict) -> Path:
+    """Append one machine-readable event without exposing uploaded contents."""
+
+    path = job_dir / "job_events.jsonl"
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "job_id": job_dir.name,
+        **event,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+    with os.fdopen(descriptor, "a", encoding="utf-8") as file:
+        file.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
     return path
 
 
@@ -155,6 +278,22 @@ def write_job_status(
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
+    try:
+        append_job_event(
+            job_dir,
+            {
+                "event": "status",
+                "state": state,
+                "stage": stage,
+                "completed_pages": int(completed_pages),
+                "total_pages": int(total_pages),
+                "message": message,
+                "error": error,
+            },
+        )
+    except OSError:
+        # A readable status remains more important than optional event history.
+        pass
     os.utime(job_dir, None)
     return path
 
@@ -335,6 +474,9 @@ def build_job_checkpoint_archive(job_dir: Path, destination: Path) -> Path:
         status = job_dir / "job_status.json"
         if status.is_file():
             archive.write(status, arcname="job_status.json")
+        review_state = job_dir / "review_state.json"
+        if review_state.is_file():
+            archive.write(review_state, arcname="review_state.json")
         for root in allowed_roots:
             if not root.is_dir():
                 continue
@@ -386,6 +528,7 @@ def restore_job_checkpoint_archive(
                 not in {
                     "job_manifest.json",
                     "job_status.json",
+                    "review_state.json",
                     "checkpoints",
                     "outputs",
                 }

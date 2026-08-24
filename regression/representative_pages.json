@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "name": "BPSD representative real-page smoke suite",
+  "dataset_root": ".",
+  "paths": {
+    "notes_json": "Xia/notes.json",
+    "image": "Xia/images/{page_id}.jpeg",
+    "yolo": "Xia/labels/{page_id}.txt",
+    "xml_repetitions": "Beethoven_Piano_Sonata_Dataset_v2/0_RawData/score_xml_repetitions/{score_id}.xml",
+    "xml_unfolded": "Beethoven_Piano_Sonata_Dataset_v2/0_RawData/score_xml_unfolded/{score_id}.xml",
+    "bps_notes": "Beethoven_Piano_Sonata_Dataset_v2/2_Annotations/ann_score_note/{score_id}.csv"
+  },
+  "pages": [
+    {
+      "page_id": "Beethoven_Op090-01-01",
+      "score_id": "Beethoven_Op090-01",
+      "page_number": 1,
+      "tags": ["fingering", "slur", "tie", "tuplet", "hairpin"],
+      "required_classes": ["slur", "tie", "tuplet3", "dynamicCrescendoHairpin"]
+    },
+    {
+      "page_id": "Beethoven_Op090-01-04",
+      "score_id": "Beethoven_Op090-01",
+      "page_number": 4,
+      "tags": ["cross-page", "slur", "tie", "hairpin", "repeat"],
+      "required_classes": ["slur", "tie", "dynamicCrescendoHairpin"]
+    },
+    {
+      "page_id": "Beethoven_Op090-01-05",
+      "score_id": "Beethoven_Op090-01",
+      "page_number": 5,
+      "tags": ["cross-page", "slur", "tie", "hairpin", "ottava"],
+      "required_classes": ["slur", "tie", "ottavaBracket"]
+    },
+    {
+      "page_id": "Beethoven_Op090-01-06",
+      "score_id": "Beethoven_Op090-01",
+      "page_number": 6,
+      "tags": ["slur", "tie", "hairpin", "ottava"],
+      "required_classes": ["slur", "tie", "ottavaBracket"]
+    },
+    {
+      "page_id": "Beethoven_Op106-01-03",
+      "score_id": "Beethoven_Op106-01",
+      "page_number": 3,
+      "tags": ["slur", "tie", "hairpin", "ottava", "pedal"],
+      "required_classes": ["slur", "tie", "ottavaBracket", "keyboardPedalPed"]
+    },
+    {
+      "page_id": "Beethoven_Op106-01-07",
+      "score_id": "Beethoven_Op106-01",
+      "page_number": 7,
+      "tags": ["slur", "tie", "tuplet", "ottava", "pedal"],
+      "required_classes": ["slur", "tie", "tuplet3", "ottavaBracket", "keyboardPedalUp"]
+    },
+    {
+      "page_id": "Beethoven_Op106-01-011",
+      "score_id": "Beethoven_Op106-01",
+      "page_number": 11,
+      "tags": ["slur", "tie", "hairpin", "ottava", "pedal"],
+      "required_classes": ["slur", "tie", "ottavaBracket", "keyboardPedalUp"]
+    },
+    {
+      "page_id": "Beethoven_Op110-01-02",
+      "score_id": "Beethoven_Op110-01",
+      "page_number": 2,
+      "tags": ["slur", "tie", "ottava", "wavy-line"],
+      "required_classes": ["slur", "tie", "ottavaBracket", "ornamentWiggleTrill"]
+    },
+    {
+      "page_id": "Beethoven_Op110-01-03",
+      "score_id": "Beethoven_Op110-01",
+      "page_number": 3,
+      "tags": ["slur", "hairpin", "wavy-line"],
+      "required_classes": ["slur", "dynamicCrescendoHairpin", "ornamentWiggleTrill"]
+    },
+    {
+      "page_id": "Beethoven_Op109-01-03",
+      "score_id": "Beethoven_Op109-01",
+      "page_number": 3,
+      "tags": ["slur", "tie", "tuplet", "ottava", "pedal"],
+      "required_classes": ["slur", "tie", "tuplet3", "ottavaBracket", "keyboardPedalUp"]
+    }
+  ]
+}

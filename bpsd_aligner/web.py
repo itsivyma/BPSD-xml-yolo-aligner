@@ -27,12 +27,14 @@ from bpsd_aligner.web_pipeline import (
     build_batch_information_outputs,
     prepare_score_sources,
     run_uploaded_alignment,
+    safe_identifier,
 )
 from bpsd_aligner.pdf_utils import pdf_page_count, render_pdf_page
 from bpsd_aligner.job_store import (
     acquire_job_lease,
     build_job_checkpoint_archive,
     job_directory,
+    load_review_state,
     load_page_checkpoint,
     prune_job_store,
     request_job_cancellation,
@@ -43,6 +45,7 @@ from bpsd_aligner.job_store import (
     write_job_manifest,
     write_job_status,
     write_page_checkpoint,
+    write_review_state,
 )
 from bpsd_aligner.review_corrections import (
     REVIEW_ACTIONS,
@@ -53,8 +56,10 @@ from bpsd_aligner.review_corrections import (
     build_review_queue,
     csv_bytes,
     load_review_checkpoint,
+    render_review_endpoint_images,
     render_review_focus_images,
 )
+from bpsd_aligner.review_dataset import REVIEW_SAMPLE_FIELDS, build_review_samples
 from bpsd_aligner.web_utils import (
     apply_page_mapping_edits,
     group_review_overlays,
@@ -62,7 +67,9 @@ from bpsd_aligner.web_utils import (
     read_csv_bytes,
     sanitize_path_columns,
     summarize_rows,
+    upload_destination,
 )
+from bps_xml_alignment import render_overlay
 from combine_yolo_xml import combine_dataset
 from pipeline_checkpoint import atomic_write_csv, atomic_write_json
 
@@ -70,11 +77,47 @@ from pipeline_checkpoint import atomic_write_csv, atomic_write_json
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 
+def _configured_user_tokens() -> dict[str, str]:
+    """Load optional per-user tokens for shared multi-user deployments."""
+
+    configured = os.environ.get("BPSD_ALIGNER_USERS_FILE", "").strip()
+    if not configured:
+        return {}
+    payload = json.loads(Path(configured).expanduser().read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError("BPSD_ALIGNER_USERS_FILE must contain a non-empty JSON object")
+    users = {
+        str(username).strip(): str(token)
+        for username, token in payload.items()
+        if str(username).strip() and str(token)
+    }
+    if len(users) != len(payload):
+        raise ValueError("every configured user requires a non-empty username and token")
+    return users
+
+
+def _job_owner_id() -> str:
+    """Return a non-reversible namespace for the authenticated browser owner."""
+
+    subject = str(st.session_state.get("bpsd_authenticated_subject", "local"))
+    return hashlib.sha256(subject.encode("utf-8")).hexdigest()
+
+
 def _require_access_token() -> None:
     """Optionally protect the app with a deployment-provided access token."""
 
+    try:
+        users = _configured_user_tokens()
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        st.error(f"Invalid multi-user authentication configuration: {error}")
+        st.stop()
     expected = os.environ.get("BPSD_ALIGNER_ACCESS_TOKEN", "")
-    if not expected or st.session_state.get("bpsd_authenticated"):
+    authenticated = st.session_state.get("bpsd_authenticated")
+    subject = str(st.session_state.get("bpsd_authenticated_subject", ""))
+    if authenticated and (not users or subject in users):
+        return
+    if not users and not expected:
+        st.session_state["bpsd_authenticated_subject"] = "local"
         return
     st.title("BPSD XML–YOLO Aligner")
     st.caption("This deployment requires an access token.")
@@ -83,11 +126,16 @@ def _require_access_token() -> None:
         st.error("Too many failed attempts in this browser session. Reload later.")
         st.stop()
     with st.form("bpsd_access_form"):
+        username = (
+            st.text_input("Username") if users else "shared-access-token"
+        )
         supplied = st.text_input("Access token", type="password")
         submitted = st.form_submit_button("Open aligner", type="primary")
     if submitted:
-        if hmac.compare_digest(supplied, expected):
+        expected_for_user = users.get(username, "") if users else expected
+        if expected_for_user and hmac.compare_digest(supplied, expected_for_user):
             st.session_state["bpsd_authenticated"] = True
+            st.session_state["bpsd_authenticated_subject"] = username
             st.session_state["bpsd_login_attempts"] = 0
             st.rerun()
         st.session_state["bpsd_login_attempts"] = attempts + 1
@@ -114,9 +162,24 @@ def _valid_upload(uploaded, label: str) -> bool:
     return True
 
 
-def _save_upload(uploaded, directory: Path, fallback_name: str) -> Path:
-    name = Path(uploaded.name).name or fallback_name
-    path = directory / name
+def _save_upload(
+    uploaded,
+    directory: Path,
+    fallback_name: str,
+    *,
+    stored_name: str | None = None,
+) -> Path:
+    """Persist an upload under an optional role-specific collision-safe name."""
+
+    directory.mkdir(parents=True, exist_ok=True)
+    path = Path(
+        upload_destination(
+            directory,
+            uploaded.name,
+            fallback_name,
+            stored_name=stored_name,
+        )
+    )
     path.write_bytes(uploaded.getvalue())
     return path
 
@@ -143,6 +206,7 @@ def _queue_background_job(
     unfolded_upload,
     clean_pdf_upload,
     resume_job_upload,
+    owner_id: str,
 ) -> Path:
     """Persist uploads and launch an independent worker process."""
 
@@ -157,27 +221,50 @@ def _queue_background_job(
     (job_dir / "cancel_requested.json").unlink(missing_ok=True)
     input_dir = job_dir / "inputs"
     input_dir.mkdir(parents=True, exist_ok=True)
-    xml_path = _save_upload(xml_upload, input_dir, "score.xml")
-    bps_path = _save_upload(bps_upload, input_dir, "ann_score_note.csv")
-    notes_path = _save_upload(notes_upload, input_dir, "notes.json")
+    xml_path = _save_upload(
+        xml_upload, input_dir, "score.xml", stored_name="repetition.xml"
+    )
+    bps_path = _save_upload(
+        bps_upload, input_dir, "ann_score_note.csv", stored_name="bps_notes.csv"
+    )
+    notes_path = _save_upload(
+        notes_upload, input_dir, "notes.json", stored_name="notes.json"
+    )
     unfolded_path = (
-        _save_upload(unfolded_upload, input_dir, "score_unfolded.xml")
+        _save_upload(
+            unfolded_upload,
+            input_dir,
+            "score_unfolded.xml",
+            stored_name="unfolded.xml",
+        )
         if unfolded_upload is not None
         else None
     )
     clean_pdf_path = (
-        _save_upload(clean_pdf_upload, input_dir, "clean_repetition.pdf")
+        _save_upload(
+            clean_pdf_upload,
+            input_dir,
+            "clean_repetition.pdf",
+            stored_name="clean_repetition.pdf",
+        )
         if clean_pdf_upload is not None
         else None
     )
     resume_path = (
-        _save_upload(resume_job_upload, input_dir, "resume_checkpoint.zip")
+        _save_upload(
+            resume_job_upload,
+            input_dir,
+            "resume_checkpoint.zip",
+            stored_name="resume_checkpoint.zip",
+        )
         if resume_job_upload is not None
         else None
     )
     page_requests = []
-    for pair in page_pairs:
-        page_dir = input_dir / "pages" / pair["stem"]
+    for page_index, pair in enumerate(page_pairs, start=1):
+        page_dir = input_dir / "pages" / safe_identifier(
+            pair["stem"], f"page-{page_index:04d}"
+        )
         page_dir.mkdir(parents=True, exist_ok=True)
         image_path = _save_upload(pair["image"], page_dir, "page.png")
         yolo_path = _save_upload(pair["yolo"], page_dir, "page.txt")
@@ -195,6 +282,7 @@ def _queue_background_job(
         job_dir,
         fingerprint=fingerprint,
         pipeline_version=PIPELINE_VERSION,
+        owner_id=owner_id,
         inputs=[
             {"name": Path(uploaded.name).name, "size": int(uploaded.size)}
             for uploaded in [
@@ -212,6 +300,7 @@ def _queue_background_job(
         "schema_version": "1.0",
         "pipeline_version": PIPELINE_VERSION,
         "fingerprint": fingerprint,
+        "owner_id": owner_id,
         "job_dir": str(job_dir),
         "score_id": score_id,
         "infer_fingerings": infer_fingerings,
@@ -253,6 +342,8 @@ def _load_background_result(job_dir: Path, fingerprint: str) -> dict:
     result = json.loads(result_path.read_text(encoding="utf-8"))
     if result.get("fingerprint") != fingerprint:
         raise ValueError("background result fingerprint does not match this session")
+    if result.get("owner_id", "") != _job_owner_id():
+        raise ValueError("background result belongs to a different authenticated user")
     result_version = str(result.get("report", {}).get("pipeline_version", ""))
     if result_version != PIPELINE_VERSION:
         raise ValueError(
@@ -285,6 +376,7 @@ def _load_background_result(job_dir: Path, fingerprint: str) -> dict:
     )
     return {
         **{key: value for key, value in result.items() if key != "detailed_csv"},
+        "job_dir": str(job_dir),
         "detailed_rows": detailed_rows,
         "review_decisions": {},
     }
@@ -429,6 +521,18 @@ def _asset_bytes(value: bytes | bytearray | str | Path) -> bytes:
     return Path(value).read_bytes()
 
 
+@st.cache_data(show_spinner=False, max_entries=256)
+def _class_overlay_on_demand(image_data: bytes, rows_json: str) -> bytes:
+    """Render only the selected class image and cache it by its content."""
+
+    image = Image.open(io.BytesIO(image_data)).convert("RGB")
+    rows = json.loads(rows_json)
+    rendered = render_overlay(image, rows, mode="class")
+    buffer = io.BytesIO()
+    rendered.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def _render_large_download(
     *,
     label: str,
@@ -482,6 +586,31 @@ def _apply_and_store_review_outputs(
     )
     if errors:
         return errors
+    persisted_decisions = {
+        f"{record.get('page_id', '')}:Y{record.get('yolo_line', '')}": record
+        for record in editor_records
+        if str(record.get("action", "pending")) != "pending"
+    }
+    if persisted_decisions:
+        job["review_decisions"] = {
+            **job.get("review_decisions", {}),
+            **persisted_decisions,
+        }
+        _persist_review_workspace(job, reviewer)
+    corrections.update(
+        {
+            "alignment_fingerprint": job.get("fingerprint", ""),
+            "score_id": job.get("report", {}).get("score_id", ""),
+            "pipeline_version": job.get("report", {}).get(
+                "pipeline_version", PIPELINE_VERSION
+            ),
+        }
+    )
+    training_rows, training_errors = build_review_samples(
+        job["detailed_rows"], corrections
+    )
+    if training_errors:
+        return training_errors
     corrections_bytes = json.dumps(
         corrections, ensure_ascii=False, indent=2
     ).encode("utf-8")
@@ -496,6 +625,10 @@ def _apply_and_store_review_outputs(
     correction_by_key = {
         f"{entry.get('page_id')}:Y{entry.get('yolo_line')}": entry
         for entry in corrections["entries"]
+    }
+    training_by_key = {
+        f"{row.get('page_id')}:Y{row.get('yolo_line')}": row
+        for row in training_rows
     }
     for source in job["detailed_rows"]:
         key = f"{source.get('page_id')}:Y{source.get('txt_line')}"
@@ -515,8 +648,21 @@ def _apply_and_store_review_outputs(
             full, crop = render_review_focus_images(image_data, image_row)
         except ValueError:
             continue
-        corrected_images[f"{key}_full.png"] = full
-        corrected_images[f"{key}_crop.png"] = crop
+        image_stem = safe_identifier(key, "review")
+        full_name = f"{image_stem}_full.png"
+        crop_name = f"{image_stem}_crop.png"
+        corrected_images[full_name] = full
+        corrected_images[crop_name] = crop
+        training_row = training_by_key.get(key)
+        if training_row is not None:
+            training_row["review_full_image"] = (
+                f"corrected_review_images/{full_name}"
+            )
+            training_row["review_crop_image"] = (
+                f"corrected_review_images/{crop_name}"
+            )
+
+    training_csv = csv_bytes(training_rows, REVIEW_SAMPLE_FIELDS)
 
     with tempfile.TemporaryDirectory(prefix="bpsd-corrected-") as temporary:
         target_dir = Path(temporary)
@@ -539,6 +685,7 @@ def _apply_and_store_review_outputs(
             archive.writestr("bps_omr_final_corrected.csv", corrected_csv)
             archive.writestr("human_corrections.json", corrections_bytes)
             archive.writestr("accuracy_report.json", accuracy_bytes)
+            archive.writestr("review_training_rows.csv", training_csv)
             for name, path in rebuilt["outputs"].items():
                 archive.write(path, arcname=f"corrected/{path.name}")
             for name, data in corrected_images.items():
@@ -551,6 +698,7 @@ def _apply_and_store_review_outputs(
         "corrected_csv": corrected_csv,
         "corrections_json": corrections_bytes,
         "accuracy_json": accuracy_bytes,
+        "training_csv": training_csv,
         "accuracy": accuracy,
         "decisions": len(corrections["entries"]),
         "complete_outputs": complete_outputs,
@@ -574,31 +722,103 @@ def _workspace_source_image(job: dict, row: dict) -> bytes | None:
     return _asset_bytes(selected) if selected is not None else None
 
 
+def _persist_review_workspace(job: dict, reviewer: str) -> None:
+    """Best-effort durable save for one authenticated alignment workspace."""
+
+    job_dir = str(job.get("job_dir", "")).strip()
+    if not job_dir:
+        return
+    report = job.get("report", {})
+    try:
+        write_review_state(
+            Path(job_dir),
+            fingerprint=str(job.get("fingerprint", "")),
+            pipeline_version=str(report.get("pipeline_version", PIPELINE_VERSION)),
+            owner_id=str(job.get("owner_id", "")),
+            score_id=str(report.get("score_id", "")),
+            reviewer=reviewer,
+            decisions=job.get("review_decisions", {}),
+        )
+    except (OSError, ValueError) as error:
+        job["review_persistence_error"] = str(error)
+    else:
+        job.pop("review_persistence_error", None)
+
+
+def _restore_review_workspace(job: dict) -> None:
+    """Restore server-side decisions once after a result/session is loaded."""
+
+    if job.get("_review_state_loaded"):
+        return
+    job["_review_state_loaded"] = True
+    job_dir = str(job.get("job_dir", "")).strip()
+    if not job_dir:
+        return
+    report = job.get("report", {})
+    try:
+        payload = load_review_state(
+            Path(job_dir),
+            fingerprint=str(job.get("fingerprint", "")),
+            pipeline_version=str(report.get("pipeline_version", PIPELINE_VERSION)),
+            owner_id=str(job.get("owner_id", "")),
+            score_id=str(report.get("score_id", "")),
+        )
+    except (OSError, ValueError) as error:
+        job["review_persistence_error"] = str(error)
+        return
+    if payload is None:
+        return
+    portable = build_review_checkpoint(
+        payload["decisions"],
+        str(payload.get("reviewer", "User")),
+        alignment_fingerprint=str(job.get("fingerprint", "")),
+        score_id=str(report.get("score_id", "")),
+        pipeline_version=str(report.get("pipeline_version", PIPELINE_VERSION)),
+    )
+    restored, errors = load_review_checkpoint(
+        portable,
+        job.get("detailed_rows", []),
+        expected_fingerprint=str(job.get("fingerprint", "")),
+        expected_score_id=str(report.get("score_id", "")),
+        expected_pipeline_version=str(
+            report.get("pipeline_version", PIPELINE_VERSION)
+        ),
+    )
+    if errors:
+        job["review_persistence_error"] = "; ".join(errors)
+        return
+    job["review_decisions"] = restored
+    st.session_state["workspace_reviewer"] = str(payload.get("reviewer", "User"))
+    job["review_restored_count"] = len(restored)
+    job.pop("review_persistence_error", None)
+
+
+def _workspace_page_id_for_number(job: dict, page_number: object) -> str:
+    expected = str(page_number or "").strip()
+    if not expected:
+        return ""
+    for row in job.get("detailed_rows", []):
+        if str(row.get("page_number", "")).strip() == expected:
+            return str(row.get("page_id", ""))
+    return ""
+
+
+def _workspace_source_image_for_page(job: dict, page_id: str) -> bytes | None:
+    if not page_id:
+        return None
+    return _workspace_source_image(job, {"page_id": page_id})
+
+
 def _render_review_outputs(job: dict) -> None:
     review_outputs = job.get("human_review_outputs")
     if not review_outputs:
         return
     st.subheader("Corrected review outputs")
-    first_download, second_download, third_download = st.columns(3)
-    first_download.download_button(
+    st.download_button(
         "Corrected BPS-OMR CSV",
         review_outputs["corrected_csv"],
         "bps_omr_final_corrected.csv",
         "text/csv",
-        use_container_width=True,
-    )
-    second_download.download_button(
-        "Corrections JSON",
-        review_outputs["corrections_json"],
-        "human_corrections.json",
-        "application/json",
-        use_container_width=True,
-    )
-    third_download.download_button(
-        "Accuracy report JSON",
-        review_outputs["accuracy_json"],
-        "accuracy_report.json",
-        "application/json",
         use_container_width=True,
     )
     st.caption(
@@ -607,36 +827,35 @@ def _render_review_outputs(job: dict) -> None:
     )
     with st.expander("Accuracy details"):
         st.json(review_outputs["accuracy"])
-    st.download_button(
-        "Download all corrected CSVs + review images ZIP",
-        review_outputs["corrected_zip"],
-        "bpsd_alignment_corrected_outputs.zip",
-        "application/zip",
-        use_container_width=True,
-    )
-    with st.expander("Corrected complete-data CSVs", expanded=False):
-        labels = {
-            "yolo_aligned_csv": "Corrected YOLO Align CSV",
-            "yolo_xml_timeline_csv": "Corrected XML + YOLO Timeline",
-            "all_information_csv": "Corrected All Information",
-            "combined_master_csv": "Corrected Combined Master",
-            "alignment_links_csv": "Corrected Alignment Links",
-            "xml_spans_csv": "XML Spans",
-            "performance_expanded_timeline_csv": (
-                "Corrected Performance-expanded Timeline"
-            ),
-        }
-        for name, label in labels.items():
-            data = review_outputs["complete_outputs"].get(name)
-            if data is not None:
-                st.download_button(
-                    label,
-                    data,
-                    f"{name.removesuffix('_csv')}_corrected.csv",
-                    "text/csv",
-                    key=f"corrected_download_{name}",
-                    use_container_width=True,
-                )
+    with st.expander("Optional corrected diagnostics", expanded=False):
+        st.download_button(
+            "Download corrected diagnostics + review images ZIP",
+            review_outputs["corrected_zip"],
+            "bpsd_alignment_corrected_diagnostics.zip",
+            "application/zip",
+            use_container_width=True,
+        )
+        st.download_button(
+            "Corrections JSON",
+            review_outputs["corrections_json"],
+            "human_corrections.json",
+            "application/json",
+            use_container_width=True,
+        )
+        st.download_button(
+            "Calibration / training rows CSV",
+            review_outputs["training_csv"],
+            "review_training_rows.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+        st.download_button(
+            "Accuracy report JSON",
+            review_outputs["accuracy_json"],
+            "accuracy_report.json",
+            "application/json",
+            use_container_width=True,
+        )
     if review_outputs["corrected_images"]:
         with st.expander("Corrected review images", expanded=False):
             image_name = st.selectbox(
@@ -691,10 +910,14 @@ def _review_note_label(candidate: dict) -> str:
 def _fill_missing_note_orders(candidates: list[dict]) -> None:
     """Backfill measure-local note order for results made by older versions."""
 
-    groups: dict[tuple[str, str], list[dict]] = {}
+    groups: dict[tuple[str, str, str], list[dict]] = {}
     for candidate in candidates:
         groups.setdefault(
-            (_candidate_printed_measure(candidate), str(candidate.get("staff", ""))),
+            (
+                str(candidate.get("page_id", "")),
+                _candidate_printed_measure(candidate),
+                str(candidate.get("staff", "")),
+            ),
             [],
         ).append(candidate)
     for group in groups.values():
@@ -750,7 +973,9 @@ def _merge_page_note_candidates(
             if identity in seen:
                 continue
             seen.add(identity)
-            merged.append(candidate)
+            prepared = dict(candidate)
+            prepared.setdefault("page_id", str(page_id))
+            merged.append(prepared)
     return merged
 
 
@@ -912,6 +1137,11 @@ def _handle_note_image_click(
 def _render_review_workspace(job: dict) -> None:
     st.subheader("人工複核")
     st.caption("每次只確認一個符號：看圖 → 選答案 → 儲存並自動到下一筆。")
+    _restore_review_workspace(job)
+    if job.get("review_restored_count"):
+        st.info(f"已自動還原 {job['review_restored_count']} 筆人工複核結果。")
+    if job.get("review_persistence_error"):
+        st.warning("人工複核自動保存未完成：" + job["review_persistence_error"])
     detailed_rows = job["detailed_rows"]
     decisions = job.setdefault("review_decisions", {})
     pages = sorted({str(row.get("page_id", "")) for row in detailed_rows if row.get("page_id")})
@@ -1014,11 +1244,40 @@ def _render_review_workspace(job: dict) -> None:
     note_candidates = [
         candidate for candidate in note_candidates if isinstance(candidate, dict)
     ]
-    is_span = str(current.get("target_type", "")) == "span"
-    if is_span:
+    start_xml_page = str(current.get("start_xml_page", "") or "").strip()
+    end_xml_page = str(current.get("end_xml_page", "") or "").strip()
+    cross_page_span = bool(
+        current.get("cross_page_span_id")
+        and start_xml_page
+        and end_xml_page
+        and start_xml_page != end_xml_page
+    )
+    start_page_id = (
+        _workspace_page_id_for_number(job, start_xml_page)
+        if cross_page_span
+        else str(current.get("page_id", ""))
+    )
+    end_page_id = (
+        _workspace_page_id_for_number(job, end_xml_page)
+        if cross_page_span
+        else str(current.get("page_id", ""))
+    )
+    is_span = str(current.get("target_type", "")) == "span" or cross_page_span
+    if cross_page_span:
+        start_page_candidates = _merge_page_note_candidates(
+            [], detailed_rows, start_page_id
+        )
+        end_page_candidates = _merge_page_note_candidates(
+            [], detailed_rows, end_page_id
+        )
+        note_candidates = [*start_page_candidates, *end_page_candidates]
+    elif is_span:
         note_candidates = _merge_page_note_candidates(
             note_candidates, detailed_rows, str(current.get("page_id", ""))
         )
+        start_page_candidates = end_page_candidates = note_candidates
+    else:
+        start_page_candidates = end_page_candidates = note_candidates
     _fill_missing_note_orders(note_candidates)
     selected_candidate = None
     selected_candidate_key = "keep"
@@ -1030,6 +1289,10 @@ def _render_review_workspace(job: dict) -> None:
             candidate
             for candidate in note_candidates
             if str(candidate.get("note_id", "")) == current_start_note
+            and (
+                not cross_page_span
+                or str(candidate.get("page_id", "")) == start_page_id
+            )
         ),
         None,
     )
@@ -1038,6 +1301,10 @@ def _render_review_workspace(job: dict) -> None:
             candidate
             for candidate in note_candidates
             if str(candidate.get("note_id", "")) == current_end_note
+            and (
+                not cross_page_span
+                or str(candidate.get("page_id", "")) == end_page_id
+            )
         ),
         None,
     )
@@ -1052,10 +1319,10 @@ def _render_review_workspace(job: dict) -> None:
             current_end_candidate
         )
     preview_start_endpoint, _preview_start_error = _resolve_endpoint_note_input(
-        st.session_state[manual_start_key], note_candidates
+        st.session_state[manual_start_key], start_page_candidates
     )
     preview_end_endpoint, _preview_end_error = _resolve_endpoint_note_input(
-        st.session_state[manual_end_key], note_candidates
+        st.session_state[manual_end_key], end_page_candidates
     )
     if note_candidates and not is_span:
         candidate_keys = [
@@ -1096,7 +1363,7 @@ def _render_review_workspace(job: dict) -> None:
         image_row["review_end_target_y_px"] = preview_end_endpoint.get("y_px", "")
 
     click_mode = "開始音符"
-    if note_candidates:
+    if note_candidates and not cross_page_span:
         click_mode = st.radio(
             "直接點圖片選音頭",
             ["開始音符", "結束音符"],
@@ -1161,10 +1428,131 @@ def _render_review_workspace(job: dict) -> None:
     )
     image_column, controls_column = st.columns([1, 1], gap="large")
     source_image = _workspace_source_image(job, current)
+    start_page_image = (
+        _workspace_source_image_for_page(job, start_page_id)
+        if cross_page_span
+        else None
+    )
+    end_page_image = (
+        _workspace_source_image_for_page(job, end_page_id)
+        if cross_page_span
+        else None
+    )
     with image_column:
         with st.container(key="review_sticky_image"):
             st.markdown("#### ① 圖片保持在這裡")
-            if source_image is not None:
+            if cross_page_span:
+                st.info(
+                    f"跨頁符號：開始為 XML 第 {start_xml_page} 頁，"
+                    f"結束為 XML 第 {end_xml_page} 頁。兩側音頭都可直接點選。"
+                )
+                feedback_key = (
+                    f"workspace_image_click_feedback_{current['review_key']}"
+                )
+                endpoint_panels = st.columns(2)
+                endpoint_specs = (
+                    (
+                        endpoint_panels[0],
+                        "開始頁",
+                        start_xml_page,
+                        start_page_image,
+                        current_start_candidate,
+                        start_page_candidates,
+                        "開始音符",
+                        "start",
+                    ),
+                    (
+                        endpoint_panels[1],
+                        "結束頁",
+                        end_xml_page,
+                        end_page_image,
+                        current_end_candidate,
+                        end_page_candidates,
+                        "結束音符",
+                        "end",
+                    ),
+                )
+                for (
+                    panel,
+                    label,
+                    xml_page,
+                    page_image,
+                    endpoint_candidate,
+                    page_candidates,
+                    endpoint_mode,
+                    surface,
+                ) in endpoint_specs:
+                    with panel:
+                        st.markdown(f"**{label} · 第 {xml_page} 頁**")
+                        if page_image is None:
+                            st.warning("這一頁沒有上傳圖片，無法顯示端點。")
+                            continue
+                        if endpoint_candidate is None:
+                            st.warning("找不到端點音頭；請在右側人工輸入。")
+                            st.image(page_image, use_container_width=True)
+                            continue
+                        try:
+                            endpoint_full, endpoint_crop, endpoint_geometry = (
+                                render_review_endpoint_images(
+                                    page_image,
+                                    endpoint_candidate,
+                                    page_candidates,
+                                    role=surface,
+                                )
+                            )
+                        except ValueError as error:
+                            st.warning(str(error))
+                            continue
+                        with Image.open(io.BytesIO(endpoint_crop)) as rendered_endpoint:
+                            endpoint_click = streamlit_image_coordinates(
+                                rendered_endpoint.copy(),
+                                use_column_width="always",
+                                key=(
+                                    f"review_click_cross_{surface}_"
+                                    f"{current['review_key']}"
+                                ),
+                                cursor="crosshair",
+                            )
+                        if _handle_note_image_click(
+                            endpoint_click,
+                            page_candidates,
+                            endpoint_geometry,
+                            review_key=current["review_key"],
+                            surface=f"cross_{surface}",
+                            click_mode=endpoint_mode,
+                            manual_start_key=manual_start_key,
+                            manual_end_key=manual_end_key,
+                            feedback_key=feedback_key,
+                            is_span=True,
+                        ):
+                            st.rerun()
+                        st.caption(_review_note_label(endpoint_candidate))
+                        with st.expander(f"顯示{label}完整頁", expanded=False):
+                            st.image(endpoint_full, use_container_width=True)
+                feedback = st.session_state.get(feedback_key)
+                if feedback:
+                    getattr(st, feedback[0])(feedback[1])
+                clear_start, clear_end = st.columns(2)
+                if clear_start.button(
+                    "清除開始音符",
+                    key=f"clear_clicked_start_{current['review_key']}",
+                    use_container_width=True,
+                ):
+                    st.session_state[manual_start_key] = ""
+                    st.session_state.pop(feedback_key, None)
+                    st.rerun()
+                if clear_end.button(
+                    "清除結束音符",
+                    key=f"clear_clicked_end_{current['review_key']}",
+                    use_container_width=True,
+                ):
+                    st.session_state[manual_end_key] = ""
+                    st.session_state.pop(feedback_key, None)
+                    st.rerun()
+                st.caption(
+                    "青色 S＝開始端點；紫色 E＝結束端點；橙色數字＝可選 XML 音頭。"
+                )
+            elif source_image is not None:
                 try:
                     full_image, crop_image, crop_geometry = render_review_focus_images(
                         source_image,
@@ -1329,10 +1717,10 @@ def _render_review_workspace(job: dict) -> None:
                         placeholder="例如：53, 上, G4, 1",
                     )
                 start_endpoint, start_error = _resolve_endpoint_note_input(
-                    start_input, note_candidates
+                    start_input, start_page_candidates
                 )
                 end_endpoint, end_error = _resolve_endpoint_note_input(
-                    end_input, note_candidates
+                    end_input, end_page_candidates
                 )
                 endpoint_errors = [error for error in (start_error, end_error) if error]
                 if start_error:
@@ -1483,6 +1871,9 @@ def _render_review_workspace(job: dict) -> None:
             ),
         }
         job["review_decisions"] = decisions
+        _persist_review_workspace(
+            job, str(st.session_state.get("workspace_reviewer", "User"))
+        )
         st.session_state["raw_alignment_job"] = job
         if current_index < len(queue) - 1:
             st.session_state[pending_key] = queue[current_index + 1]["review_key"]
@@ -1611,6 +2002,9 @@ def _render_review_workspace(job: dict) -> None:
                     st.error(error)
             else:
                 job["review_decisions"] = restored
+                _persist_review_workspace(
+                    job, str(checkpoint_payload.get("reviewer", "User"))
+                )
                 st.session_state["raw_alignment_job"] = job
                 st.success(f"Restored {len(restored)} review decisions.")
                 st.rerun()
@@ -1667,13 +2061,6 @@ def _render_completed_job(job: dict) -> None:
     third.metric("Confirmed values", report.get("confirmed_rows", 0))
     fourth.metric("Needs review", report["yolo_rows_needing_review"])
     st.caption(f"Job ID: {job.get('fingerprint', '')[:12]}")
-    if job.get("job_checkpoint_zip"):
-        _render_large_download(
-            label="Download resumable alignment checkpoint ZIP",
-            value=job["job_checkpoint_zip"],
-            file_name="alignment_job_checkpoint.zip",
-            key="alignment_checkpoint_zip",
-        )
     if "clean_reference_pages_used" in report:
         st.caption(
             "Clean repetition PDF geometry used on "
@@ -1730,19 +2117,47 @@ def _render_completed_job(job: dict) -> None:
                         sorted(class_overlays),
                         key=f"class_overlay_select_{selected_page}",
                     )
-                    selected_overlay = _asset_bytes(class_overlays[selected_class])
-                    st.image(
-                        selected_overlay,
-                        caption=f"{selected_page} — class: {selected_class}",
-                        use_container_width=True,
-                    )
-                    st.download_button(
-                        "Download this class image at full resolution",
-                        selected_overlay,
-                        f"{selected_page}_class_{selected_class}.png",
-                        "image/png",
-                        use_container_width=True,
-                    )
+                    stored_overlay = class_overlays[selected_class]
+                    if stored_overlay is not None:
+                        selected_overlay = _asset_bytes(stored_overlay)
+                    else:
+                        image_source = job.get("page_images", {}).get(selected_page)
+                        class_rows = [
+                            row
+                            for row in job["detailed_rows"]
+                            if row.get("page_id") == selected_page
+                            and row.get("class") == selected_class
+                        ]
+                        if image_source is None or not class_rows:
+                            selected_overlay = None
+                        else:
+                            with st.spinner("Generating this class image…"):
+                                selected_overlay = _class_overlay_on_demand(
+                                    _asset_bytes(image_source),
+                                    json.dumps(
+                                        class_rows,
+                                        ensure_ascii=False,
+                                        sort_keys=True,
+                                    ),
+                                )
+                            st.caption(
+                                "Generated on demand; reopening this class uses the cache."
+                            )
+                    if selected_overlay is not None:
+                        st.image(
+                            selected_overlay,
+                            caption=f"{selected_page} — class: {selected_class}",
+                            use_container_width=True,
+                        )
+                        st.download_button(
+                            "Download this class image at full resolution",
+                            selected_overlay,
+                            f"{selected_page}_class_{selected_class}.png",
+                            "image/png",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.info("The source page image for this class is unavailable.")
                 else:
                     st.info("No per-class review images were generated for this page.")
         else:
@@ -1857,99 +2272,39 @@ def _render_completed_job(job: dict) -> None:
         else:
             st.success("No rows are currently available for review.")
 
-    st.subheader("完整資料輸出")
-    st.caption(
-        "XML 只匯出一次，不會因為上傳多張樂譜圖片而重複。"
-    )
-    yolo_download, xml_download, timeline_download = st.columns(3)
-    yolo_download.download_button(
-        "1. YOLO Align CSV",
-        _asset_bytes(job["yolo_aligned_csv"]),
-        "yolo_aligned.csv",
-        "text/csv",
-        use_container_width=True,
-    )
-    xml_download.download_button(
-        "2. XML Events CSV",
-        _asset_bytes(job["xml_events_csv"]),
-        "xml_events.csv",
-        "text/csv",
-        use_container_width=True,
-    )
-    timeline_download.download_button(
-        "3. XML + YOLO 時間排序 CSV",
-        _asset_bytes(job["yolo_xml_timeline_csv"]),
-        "yolo_xml_timeline.csv",
-        "text/csv",
-        use_container_width=True,
-    )
-    st.caption(
-        "Timeline 保留每個 YOLO bbox 與每個 XML event，並依 start/end time 排序。"
-    )
-    with st.expander("更多完整／原始 XML 輸出", expanded=False):
-        raw_xml, all_info, combined, links = st.columns(4)
-        raw_xml.download_button(
-            "XML Nodes（原始節點）",
-            _asset_bytes(job["xml_nodes_csv"]),
-            "xml_nodes.csv",
-            "text/csv",
-            use_container_width=True,
-        )
-        all_info.download_button(
-            "All Information",
-            _asset_bytes(job["all_information_csv"]),
-            "all_information.csv",
-            "text/csv",
-            use_container_width=True,
-        )
-        combined.download_button(
-            "Combined Master",
-            _asset_bytes(job["combined_master_csv"]),
-            "combined_master.csv",
-            "text/csv",
-            use_container_width=True,
-        )
-        links.download_button(
-            "Alignment Links",
-            _asset_bytes(job["alignment_links_csv"]),
-            "alignment_links.csv",
-            "text/csv",
-            use_container_width=True,
-        )
-        spans, performance = st.columns(2)
-        spans.download_button(
-            "XML Spans（跨頁起訖）",
-            _asset_bytes(job["xml_spans_csv"]),
-            "xml_spans.csv",
-            "text/csv",
-            use_container_width=True,
-        )
-        performance.download_button(
-            "Performance-expanded Timeline",
-            _asset_bytes(job["performance_expanded_timeline_csv"]),
-            "performance_expanded_timeline.csv",
-            "text/csv",
-            use_container_width=True,
-        )
-        st.caption(
-            "XML Nodes 保留 tag、attributes、text、XPath 與父子關係；"
-            "All Information 同時包含 YOLO、XML events 與 XML nodes。"
-        )
-
-    st.subheader("BPS-OMR Final CSV")
+    st.subheader("Final BPS-OMR CSV")
     st.download_button(
-        "Download BPS-OMR final CSV",
+        "Download final CSV",
         _asset_bytes(job["final_bps_csv"]),
         "bps_omr_final.csv",
         "text/csv",
         use_container_width=True,
     )
     st.caption(
-        "Exactly one row per YOLO bounding box. Columns follow BPS-OMR "
-        "annotations plus human_corrected. Uncertain or unavailable values are blank."
+        "每個 YOLO bounding box 一列。欄位依 BPS-OMR annotations："
+        "class_id、x、y、w、h、class、musical_time、start_meas、end_meas、"
+        "start_note、end_note、connected_note、stem_dir；另外只保留 "
+        "human_corrected 與 is_repeated_measure。不確定值留空。"
     )
 
-    with st.expander("Validation details"):
+    with st.expander("Optional diagnostics and recovery files", expanded=False):
+        st.caption(
+            "一般使用只需下載上方 final CSV。這裡的 ZIP 收納 XML、YOLO、"
+            "時間排序、驗證資料與 review images，供除錯或研究追溯。"
+        )
+        _render_large_download(
+            label="Diagnostics + review images ZIP",
+            value=job["output_zip"],
+            file_name="bpsd_alignment_diagnostics.zip",
+            key="final_outputs_zip",
+        )
+        if job.get("job_checkpoint_zip"):
+            _render_large_download(
+                label="Resumable alignment checkpoint ZIP",
+                value=job["job_checkpoint_zip"],
+                file_name="alignment_job_checkpoint.zip",
+                key="alignment_checkpoint_zip",
+            )
         st.download_button(
             "Validation JSON",
             _asset_bytes(job["validation_json"]),
@@ -1957,12 +2312,6 @@ def _render_completed_job(job: dict) -> None:
             "application/json",
             use_container_width=True,
         )
-    _render_large_download(
-        label="Final CSV + review images ZIP",
-        value=job["output_zip"],
-        file_name="bpsd_alignment_outputs.zip",
-        key="final_outputs_zip",
-    )
     with st.expander("Alignment status counts"):
         st.json(report.get("yolo_status_counts", {}))
 
@@ -1986,8 +2335,9 @@ with align_tab:
     )
     st.info(
         "Version guide: upload the written-score XML from score_xml_repetitions "
-        "in Repetition MusicXML. Upload the performance-order XML from "
-        "score_xml_unfolded in Unfolded MusicXML. Do not upload .sib files. "
+        "in Repetition MusicXML; repeat and ending structures are read from it. "
+        "Optionally upload score_xml_unfolded only to validate performance order. "
+        "Do not upload .sib files. "
         "A clean score used for image geometry must be the repetition version, "
         "not the unfolded version."
     )
@@ -2026,12 +2376,13 @@ with align_tab:
             ),
         )
         unfolded_upload = st.file_uploader(
-            "Unfolded MusicXML — score_xml_unfolded/*.xml (recommended)",
+            "Unfolded MusicXML — score_xml_unfolded/*.xml (optional validation)",
             type=["xml", "musicxml"],
             key="raw_unfolded_xml",
             help=(
-                "Use the repeat-expanded XML from 0_RawData/score_xml_unfolded. "
-                "This supplies performance order; it is not used as the scan layout."
+                "Optionally use the repeat-expanded XML from "
+                "0_RawData/score_xml_unfolded to validate the performance order "
+                "derived from repetition XML. It never supplies scan layout."
             ),
         )
         clean_pdf_upload = st.file_uploader(
@@ -2201,6 +2552,7 @@ with align_tab:
                 "scan_page_ends": [pair.get("page_end_measure") for pair in page_pairs],
                 "infer_fingerings": infer_fingerings,
                 "pipeline_version": PIPELINE_VERSION,
+                "owner_id": _job_owner_id(),
             }
             fingerprint = _upload_fingerprint(
                 [
@@ -2227,6 +2579,7 @@ with align_tab:
                         unfolded_upload=unfolded_upload,
                         clean_pdf_upload=clean_pdf_upload,
                         resume_job_upload=resume_job_upload,
+                        owner_id=options["owner_id"],
                     )
                 except Exception as error:
                     st.error(f"Unable to queue background job: {type(error).__name__}: {error}")
@@ -2271,16 +2624,30 @@ with align_tab:
                             input_dir = temporary_path / "inputs"
                             output_dir = temporary_path / "outputs"
                             input_dir.mkdir(parents=True, exist_ok=True)
-                            xml_path = _save_upload(xml_upload, input_dir, "score.xml")
+                            xml_path = _save_upload(
+                                xml_upload,
+                                input_dir,
+                                "score.xml",
+                                stored_name="repetition.xml",
+                            )
                             bps_path = _save_upload(
-                                bps_upload, input_dir, "ann_score_note.csv"
+                                bps_upload,
+                                input_dir,
+                                "ann_score_note.csv",
+                                stored_name="bps_notes.csv",
                             )
                             notes_path = _save_upload(
-                                notes_upload, input_dir, "notes.json"
+                                notes_upload,
+                                input_dir,
+                                "notes.json",
+                                stored_name="notes.json",
                             )
                             unfolded_path = (
                                 _save_upload(
-                                    unfolded_upload, input_dir, "score_unfolded.xml"
+                                    unfolded_upload,
+                                    input_dir,
+                                    "score_unfolded.xml",
+                                    stored_name="unfolded.xml",
                                 )
                                 if unfolded_upload is not None
                                 else None
@@ -2290,6 +2657,7 @@ with align_tab:
                                     clean_pdf_upload,
                                     input_dir,
                                     "clean_repetition.pdf",
+                                    stored_name="clean_repetition.pdf",
                                 )
                                 if clean_pdf_upload is not None
                                 else None
@@ -2298,6 +2666,7 @@ with align_tab:
                                 temporary_path,
                                 fingerprint=fingerprint,
                                 pipeline_version=PIPELINE_VERSION,
+                                owner_id=options["owner_id"],
                                 inputs=[
                                     {
                                         "name": Path(uploaded.name).name,
@@ -2440,7 +2809,10 @@ with align_tab:
                                         ),
                                     )
                                     continue
-                                page_input_dir = input_dir / pair["stem"]
+                                page_input_dir = input_dir / "pages" / safe_identifier(
+                                    pair["stem"],
+                                    f"page-{page_index + 1:04d}",
+                                )
                                 page_input_dir.mkdir(parents=True, exist_ok=True)
                                 image_path = _save_upload(
                                     pair["image"], page_input_dir, "page.png"
@@ -2503,6 +2875,8 @@ with align_tab:
                                         "system_start_measures"
                                     ),
                                     page_end_measure=pair.get("page_end_measure"),
+                                    render_class_overlays=False,
+                                    render_auxiliary_overlays=False,
                                 )
                                 page_reports.append(page_report)
                                 page_outputs = {
@@ -2708,6 +3082,8 @@ with align_tab:
                             )
                             st.session_state["raw_alignment_job"] = {
                                 "fingerprint": fingerprint,
+                                "owner_id": options["owner_id"],
+                                "job_dir": str(temporary_path),
                                 "report": report,
                                 "final_bps_csv": str(final_path),
                                 **{
@@ -2851,5 +3227,5 @@ bpsd-aligner combine --help""",
     )
     st.info(
         "The BPSD note annotation CSV is required for official note IDs and timeline fields. "
-        "The unfolded MusicXML is recommended when the written score contains repeats."
+        "Repeat order comes from repetition MusicXML; unfolded MusicXML is optional validation."
     )

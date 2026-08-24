@@ -11,6 +11,7 @@ from bpsd_aligner.job_store import (
     acquire_job_lease,
     build_job_checkpoint_archive,
     job_directory,
+    load_review_state,
     load_page_checkpoint,
     publish_completed_job,
     prune_job_store,
@@ -21,6 +22,7 @@ from bpsd_aligner.job_store import (
     write_job_status,
     write_page_checkpoint,
     write_job_manifest,
+    write_review_state,
 )
 
 
@@ -112,10 +114,20 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
     artifact = source / "outputs" / "pages" / "page.csv"
     artifact.parent.mkdir(parents=True)
     artifact.write_text("a\n1\n")
+    write_review_state(
+        source,
+        fingerprint=fingerprint,
+        pipeline_version="v1",
+        owner_id="",
+        score_id="score",
+        reviewer="Ivy",
+        decisions={"page:Y1": {"page_id": "page", "yolo_line": "1", "action": "confirm"}},
+    )
     (source / "outputs" / "all_outputs.zip").write_bytes(b"duplicate")
     archive = build_job_checkpoint_archive(source, tmp_path / "checkpoint.zip")
     with zipfile.ZipFile(archive) as packaged:
         assert "outputs/all_outputs.zip" not in packaged.namelist()
+        assert "review_state.json" in packaged.namelist()
     target = job_directory(fingerprint, root=tmp_path / "target")
     restored = restore_job_checkpoint_archive(
         archive.read_bytes(),
@@ -123,9 +135,10 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
         expected_fingerprint=fingerprint,
         expected_pipeline_version="v1",
     )
-    assert restored == 3
+    assert restored == 4
     assert (target / "outputs" / "pages" / "page.csv").is_file()
     assert json.loads((target / "job_status.json").read_text())["stage"] == "aligning"
+    assert (target / "review_state.json").is_file()
     with pytest.raises(ValueError, match="different uploaded inputs"):
         restore_job_checkpoint_archive(
             archive.read_bytes(), target, expected_fingerprint="c" * 64
@@ -139,6 +152,52 @@ def test_portable_checkpoint_archive_validates_fingerprint_and_restores(tmp_path
         )
 
 
+def test_review_state_is_atomic_and_bound_to_job_identity(tmp_path: Path):
+    fingerprint = "9" * 64
+    job = job_directory(fingerprint, root=tmp_path)
+    write_job_manifest(
+        job,
+        fingerprint=fingerprint,
+        pipeline_version="v1",
+        owner_id="owner-a",
+        inputs=[],
+    )
+    path = write_review_state(
+        job,
+        fingerprint=fingerprint,
+        pipeline_version="v1",
+        owner_id="owner-a",
+        score_id="score-a",
+        reviewer="Ivy",
+        decisions={"p:Y1": {"page_id": "p", "yolo_line": "1", "action": "correct"}},
+    )
+
+    assert path.name == "review_state.json"
+    restored = load_review_state(
+        job,
+        fingerprint=fingerprint,
+        pipeline_version="v1",
+        owner_id="owner-a",
+        score_id="score-a",
+    )
+    assert restored["reviewer"] == "Ivy"
+    assert restored["decisions"]["p:Y1"]["action"] == "correct"
+    with pytest.raises(ValueError, match="different authenticated user"):
+        load_review_state(
+            job,
+            fingerprint=fingerprint,
+            pipeline_version="v1",
+            owner_id="owner-b",
+            score_id="score-a",
+        )
+    with pytest.raises(ValueError, match="identity mismatch"):
+        load_review_state(
+            job,
+            fingerprint=fingerprint,
+            pipeline_version="v1",
+            owner_id="owner-a",
+            score_id="other-score",
+        )
 def test_prune_job_store_removes_only_old_inactive_jobs(tmp_path: Path):
     old = job_directory("1" * 64, root=tmp_path)
     current = job_directory("2" * 64, root=tmp_path)
@@ -174,6 +233,12 @@ def test_job_status_preserves_creation_time_and_validates_state(tmp_path: Path):
     updated = json.loads(path.read_text())
     assert updated["created_at"] == created
     assert updated["completed_pages"] == 2
+    events = [
+        json.loads(line)
+        for line in (job / "job_events.jsonl").read_text().splitlines()
+    ]
+    assert [event["state"] for event in events] == ["queued", "running"]
+    assert all(event["job_id"] == job.name for event in events)
     with pytest.raises(ValueError, match="unsupported job state"):
         write_job_status(job, state="unknown", stage="bad")
 

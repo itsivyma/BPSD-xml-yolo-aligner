@@ -361,6 +361,7 @@ def render_review_focus_images(
     row: dict,
     *,
     include_crop_geometry: bool = False,
+    show_bbox: bool = True,
 ) -> tuple[bytes, bytes] | tuple[bytes, bytes, dict]:
     """Render a full-page highlight and a context crop without resampling blur."""
 
@@ -432,7 +433,10 @@ def render_review_focus_images(
     full = image.copy()
     full_draw = ImageDraw.Draw(full)
     stroke = max(3, round(min(width, height) * 0.0025))
-    full_draw.rectangle((left, top, right, bottom), outline="#e31a1c", width=stroke)
+    if show_bbox:
+        full_draw.rectangle(
+            (left, top, right, bottom), outline="#e31a1c", width=stroke
+        )
 
     marker_radius = max(14, round(min(width, height) * 0.012))
     marker_font = ImageFont.load_default()
@@ -547,16 +551,17 @@ def render_review_focus_images(
     crop_bottom = min(height, round(max(focus_y) + vertical_padding))
     crop = image.crop((crop_left, crop_top, crop_right, crop_bottom))
     crop_draw = ImageDraw.Draw(crop)
-    crop_draw.rectangle(
-        (
-            left - crop_left,
-            top - crop_top,
-            right - crop_left,
-            bottom - crop_top,
-        ),
-        outline="#e31a1c",
-        width=stroke,
-    )
+    if show_bbox:
+        crop_draw.rectangle(
+            (
+                left - crop_left,
+                top - crop_top,
+                right - crop_left,
+                bottom - crop_top,
+            ),
+            outline="#e31a1c",
+            width=stroke,
+        )
     for point, label in review_candidates:
         draw_target(
             crop_draw,
@@ -631,6 +636,44 @@ def render_review_focus_images(
             "page_width": width,
             "page_height": height,
         },
+    )
+
+
+def render_review_endpoint_images(
+    image_data: bytes,
+    candidate: dict,
+    page_candidates: list[dict],
+    *,
+    role: str,
+) -> tuple[bytes, bytes, dict]:
+    """Render one cross-page endpoint without drawing a false YOLO box."""
+
+    with Image.open(io.BytesIO(image_data)) as source:
+        width, height = source.size
+    try:
+        point_x = float(candidate["x_px"])
+        point_y = float(candidate["y_px"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("Cross-page endpoint is missing notehead geometry") from error
+    if not (0 <= point_x < width and 0 <= point_y < height):
+        raise ValueError("Cross-page endpoint falls outside its page image")
+    is_start = role == "start"
+    row = {
+        "x": point_x / width,
+        "y": point_y / height,
+        "w": max(0.006, 18 / width),
+        "h": max(0.006, 18 / height),
+        "target_x_px" if is_start else "end_target_x_px": point_x,
+        "target_y_px" if is_start else "end_target_y_px": point_y,
+        "review_note_candidates_json": json.dumps(
+            page_candidates, ensure_ascii=False
+        ),
+    }
+    return render_review_focus_images(
+        image_data,
+        row,
+        include_crop_geometry=True,
+        show_bbox=False,
     )
 
 

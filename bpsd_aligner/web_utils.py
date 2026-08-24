@@ -9,6 +9,19 @@ from collections import Counter
 from pathlib import PurePath
 
 
+def upload_destination(
+    directory: PurePath,
+    uploaded_name: str,
+    fallback_name: str,
+    *,
+    stored_name: str | None = None,
+) -> PurePath:
+    """Return a basename-only upload path, optionally fixed by input role."""
+
+    selected = stored_name or PurePath(uploaded_name).name or fallback_name
+    return directory / PurePath(selected).name
+
+
 def filename_page_number(stem: str) -> int | None:
     match = re.search(r"(?:^|[-_])(\d+)$", stem)
     return int(match.group(1)) if match else None
@@ -205,6 +218,17 @@ def group_review_overlays(
                 "needs_review": needs_review.get(page_id, 0),
             },
         )
+
+    for row in detailed_rows:
+        page_id = str(row.get("page_id", ""))
+        class_name = str(row.get("class", ""))
+        if not page_id:
+            continue
+        entry = page_entry(page_id)
+        if class_name:
+            classes = entry["classes"]
+            assert isinstance(classes, dict)
+            classes.setdefault(class_name, None)
 
     for name, data in overlays.items():
         if name.startswith("class_"):

@@ -40,6 +40,19 @@ def test_web_app_can_require_an_access_token(monkeypatch):
     assert any(button.label == "Open aligner" for button in result.button)
 
 
+def test_web_app_supports_per_user_access_tokens(tmp_path, monkeypatch):
+    users = tmp_path / "users.json"
+    users.write_text(json.dumps({"reviewer-a": "token-a"}), encoding="utf-8")
+    monkeypatch.delenv("BPSD_ALIGNER_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("BPSD_ALIGNER_USERS_FILE", str(users))
+    app = Path(__file__).parents[1] / "bpsd_aligner" / "web.py"
+    result = AppTest.from_file(str(app)).run(timeout=15)
+
+    assert not result.exception
+    assert any(field.label == "Username" for field in result.text_input)
+    assert any(field.label == "Access token" for field in result.text_input)
+
+
 def test_completed_job_exposes_human_review_editor_and_apply_button():
     app_path = Path(__file__).parents[1] / "bpsd_aligner" / "web.py"
     app = AppTest.from_file(str(app_path))
@@ -71,10 +84,14 @@ def test_completed_job_exposes_human_review_editor_and_apply_button():
         "validation_json": b"{}",
         "output_zip": b"zip",
         "overlays": {},
-        "page_images": {"page-01": page_buffer.getvalue()},
+        "page_images": {
+            "page-01": page_buffer.getvalue(),
+            "page-02": page_buffer.getvalue(),
+        },
         "detailed_rows": [
             {
                 "page_id": "page-01",
+                "page_number": "1",
                 "txt_line": "1",
                 "class_id": "56",
                 "class": "slur",
@@ -92,9 +109,27 @@ def test_completed_job_exposes_human_review_editor_and_apply_button():
                 "xml_staff": "1",
                 "status": "review",
                 "target_type": "span",
+                "cross_page_span_id": "score:SPAN1",
+                "start_xml_page": "1",
+                "end_xml_page": "2",
+                "review_note_candidates_json": json.dumps(
+                    [
+                        {
+                            "note_id": 10,
+                            "start_meas": "1.0",
+                            "end_meas": "1.0",
+                            "pitch": "C4",
+                            "xml_measure": 1,
+                            "staff": 1,
+                            "x_px": 400,
+                            "y_px": 500,
+                        }
+                    ]
+                ),
             },
             {
                 "page_id": "page-01",
+                "page_number": "1",
                 "txt_line": "2",
                 "class_id": "25",
                 "class": "fingering1",
@@ -130,6 +165,41 @@ def test_completed_job_exposes_human_review_editor_and_apply_button():
                     ]
                 ),
             },
+            {
+                "page_id": "page-02",
+                "page_number": "2",
+                "txt_line": "1",
+                "class_id": "56",
+                "class": "slur",
+                "x": "0.4",
+                "y": "0.5",
+                "w": "0.1",
+                "h": "0.02",
+                "musical_time": "0",
+                "start_meas": "2.0",
+                "end_meas": "2.0",
+                "start_note": "20",
+                "end_note": "20",
+                "connected_note": "[20]",
+                "stem_dir": "NA",
+                "xml_staff": "1",
+                "status": "matched",
+                "target_type": "note",
+                "review_note_candidates_json": json.dumps(
+                    [
+                        {
+                            "note_id": 20,
+                            "start_meas": "2.0",
+                            "end_meas": "2.0",
+                            "pitch": "D4",
+                            "xml_measure": 2,
+                            "staff": 1,
+                            "x_px": 320,
+                            "y_px": 500,
+                        }
+                    ]
+                ),
+            },
         ],
     }
 
@@ -154,16 +224,25 @@ def test_completed_job_exposes_human_review_editor_and_apply_button():
         button.label == "Apply all saved workspace decisions"
         for button in result.button
     )
+    assert any("跨頁符號" in item.value for item in result.info)
     assert any(
         uploader.label == "Resume from review checkpoint"
         for uploader in result.file_uploader
     )
     assert any(
-        checkbox.label == "Prepare Final CSV + review images ZIP"
+        checkbox.label == "Prepare Diagnostics + review images ZIP"
         for checkbox in result.checkbox
     )
     assert not any(
-        button.label == "Final CSV + review images ZIP"
+        button.label in {
+            "1. YOLO Align CSV",
+            "2. XML Events CSV",
+            "3. XML + YOLO 時間排序 CSV",
+        }
+        for button in result.button
+    )
+    assert not any(
+        button.label == "Diagnostics + review images ZIP"
         for button in result.button
     )
     next_button = next(button for button in result.button if button.label == "下一筆 →")

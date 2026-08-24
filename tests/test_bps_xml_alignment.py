@@ -19,8 +19,18 @@ from bps_xml_alignment import (
     detect_systems,
     load_categories,
     load_yolo,
+    match_dynamics,
+    match_cross_page_spans,
+    match_direction_symbols,
     match_fingerings,
     match_point_notations,
+    match_small_beams,
+    match_small_flags,
+    match_small_note_symbols,
+    match_small_stems,
+    match_text_directions,
+    match_tuplets,
+    match_wavy_line_spans,
     match_xml_spans,
     estimate_all_symbol_times,
     note_pixel_position,
@@ -30,6 +40,93 @@ from bps_xml_alignment import (
     write_csv,
 )
 from defusedxml.common import EntitiesForbidden
+
+
+def _one_system() -> list[SystemGeometry]:
+    return [
+        SystemGeometry(
+            number=1,
+            upper=StaffGeometry(
+                center=100, line_spacing=10, lines=[80, 90, 100, 110, 120]
+            ),
+            lower=StaffGeometry(
+                center=250, line_spacing=10, lines=[230, 240, 250, 260, 270]
+            ),
+            x_left=100,
+            x_right=900,
+        )
+    ]
+
+
+def test_dynamic_count_agreement_alone_cannot_produce_full_confidence():
+    boxes = [
+        {
+            "txt_line": 1,
+            "class_id": 29,
+            "class": "dynamicF",
+            "x": 0.10,
+            "y": 0.20,
+            "w": 0.02,
+            "h": 0.02,
+        }
+    ]
+    events = [
+        {
+            "class": "dynamicF",
+            "system": 1,
+            "x_norm": 0.90,
+            "bps_time": 2.0,
+            "xml_measure": 3,
+            "xml_symbol": "f",
+            "staff": 1,
+            "repeat_occurrences": [],
+        }
+    ]
+
+    rows, _unused = match_dynamics(boxes, events, _one_system(), 400)
+
+    assert rows[0]["count_agreement"] == "1.000"
+    assert rows[0]["geometry_score"] == "0.000"
+    assert rows[0]["confidence"] != "1.000"
+    assert rows[0]["status"] == "review"
+    assert rows[0]["confidence_calibrated"] == "false"
+
+
+def test_repeat_disagreement_prevents_dynamic_auto_acceptance():
+    boxes = [
+        {
+            "txt_line": 1,
+            "class_id": 29,
+            "class": "dynamicF",
+            "x": 0.50,
+            "y": 0.20,
+            "w": 0.02,
+            "h": 0.02,
+        }
+    ]
+    events = [
+        {
+            "class": "dynamicF",
+            "system": 1,
+            "x_norm": 0.50,
+            "bps_time": 2.0,
+            "xml_measure": 3,
+            "xml_symbol": "f",
+            "staff": 1,
+            "repeat_occurrences": [
+                {"mapping_status": "structural_unfolded_disagreement"}
+            ],
+        }
+    ]
+
+    rows, _unused = match_dynamics(boxes, events, _one_system(), 400)
+
+    assert rows[0]["match_score"] == "1.000"
+    assert rows[0]["repeat_mapping_status"] == (
+        "structural_unfolded_disagreement"
+    )
+    assert rows[0]["status"] == "review"
+    assert rows[0]["xml_time_confirmed"] == "false"
 
 
 def test_attach_review_note_candidates_orders_nearby_notes_and_keeps_metadata():
@@ -201,6 +298,346 @@ def test_parse_musicxml_keeps_tied_start_and_stop(tmp_path):
 
     assert page["notes"][0]["tie_marks"] == [{"type": "start"}]
     assert page["notes"][1]["tie_marks"] == [{"type": "stop"}]
+
+
+def test_parse_musicxml_keeps_grace_beams_and_direction_endpoints(tmp_path):
+    xml_path = tmp_path / "directions.xml"
+    xml_path.write_text(
+        """<?xml version="1.0"?>
+<score-partwise><part-list><score-part id="P1"><part-name>Piano</part-name>
+</score-part></part-list><part id="P1"><measure number="1" width="100">
+  <attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+  <direction><direction-type><words default-x="12">a tempo</words><metronome default-x="14"><beat-unit>quarter</beat-unit><per-minute>120</per-minute></metronome><octave-shift type="down" number="1" size="8" default-x="10"/><wedge type="crescendo" number="1" default-x="10"/></direction-type><staff>1</staff></direction>
+  <direction><direction-type><pedal type="start" number="1" default-x="10"/></direction-type><staff>2</staff></direction>
+  <note default-x="20"><grace/><pitch><step>E</step><octave>4</octave></pitch><voice>1</voice><type>eighth</type><staff>1</staff><stem>up</stem><beam number="1">begin</beam></note>
+  <note default-x="30"><grace/><pitch><step>F</step><octave>4</octave></pitch><voice>1</voice><type>eighth</type><staff>1</staff><stem>up</stem><beam number="1">end</beam></note>
+  <note default-x="40"><pitch><step>G</step><octave>4</octave></pitch><duration>4</duration><voice>1</voice><staff>1</staff></note>
+  <direction><direction-type><octave-shift type="stop" number="1" default-x="90"/><wedge type="stop" number="1" default-x="90"/></direction-type><staff>1</staff></direction>
+  <direction><direction-type><pedal type="stop" number="1" default-x="90"/></direction-type><staff>2</staff></direction>
+</measure></part></score-partwise>""",
+        encoding="utf-8",
+    )
+
+    page = parse_musicxml_page(xml_path, 1)
+
+    assert [note["is_grace"] for note in page["notes"]] == [True, True, False]
+    assert page["notes"][0]["beam_values"] == ["begin"]
+    assert page["notes"][1]["beam_values"] == ["end"]
+    assert [(item["kind"], item["type"]) for item in page["direction_markers"]] == [
+        ("octave", "down"),
+        ("wedge", "crescendo"),
+        ("pedal", "start"),
+        ("octave", "stop"),
+        ("wedge", "stop"),
+        ("pedal", "stop"),
+    ]
+    assert [(item["kind"], item["text"]) for item in page["text_directions"]] == [
+        ("words", "a tempo"),
+        ("metronome", "quarter=120"),
+    ]
+
+
+def test_small_note_stem_and_beam_matchers_keep_xml_note_semantics():
+    systems = _one_system()
+    base = {
+        "system": 1,
+        "staff": 1,
+        "voice": "1",
+        "xml_measure": 2,
+        "printed_measure": 2,
+        "xml_measure_index": 2,
+        "system_measure_index": 0,
+        "clef": {"sign": "G", "line": 2},
+        "is_grace": True,
+        "note_type": "eighth",
+        "stem": "up",
+        "accidental": "",
+        "occurrences": [],
+    }
+    notes = [
+        {
+            **base,
+            "xml_note_sequence": 1,
+            "xml_chord_sequence": 1,
+            "x_norm": 0.30,
+            "bps_time": 1.0,
+            "end_bps_time": 1.125,
+            "note_id": 10,
+            "midi": 64,
+            "pitch_name": "E4",
+            "diatonic": 30,
+            "beam_values": ["begin"],
+        },
+        {
+            **base,
+            "xml_note_sequence": 2,
+            "xml_chord_sequence": 2,
+            "x_norm": 0.50,
+            "bps_time": 1.125,
+            "end_bps_time": 1.250,
+            "note_id": 11,
+            "midi": 65,
+            "pitch_name": "F4",
+            "diatonic": 31,
+            "beam_values": ["end"],
+        },
+    ]
+    first_x, first_y = note_pixel_position(notes[0], systems[0])
+    second_x, _second_y = note_pixel_position(notes[1], systems[0])
+    boxes = [
+        {
+            "txt_line": 1,
+            "class_id": 62,
+            "class": "noteheadBlackOnLineSmall",
+            "x": first_x / 1000,
+            "y": first_y / 400,
+            "w": 0.01,
+            "h": 0.02,
+        },
+        {
+            "txt_line": 2,
+            "class_id": 88,
+            "class": "stemSmall",
+            "x": first_x / 1000,
+            "y": first_y / 400,
+            "w": 0.005,
+            "h": 0.08,
+        },
+        {
+            "txt_line": 3,
+            "class_id": 20,
+            "class": "beamSmall",
+            "x": ((first_x + second_x) / 2) / 1000,
+            "y": first_y / 400,
+            "w": abs(second_x - first_x) / 1000,
+            "h": 0.01,
+        },
+    ]
+
+    notehead = match_small_note_symbols(boxes, notes, systems, 1000, 400)[0]
+    stem = match_small_stems(boxes, notes, systems, 1000, 400)[0]
+    beam = match_small_beams(boxes, notes, systems, 1000, 400)[0]
+
+    assert notehead["status"] == "matched"
+    assert notehead["connected_note"] == "[10]"
+    assert notehead["end_meas"] == "1.125"
+    assert stem["stem_dir"] == 1
+    assert stem["end_meas"] == "1.125"
+    assert beam["connected_note"] == "[10, 11]"
+    assert beam["end_meas"] == "1.250"
+
+
+def test_small_flag_matcher_uses_unbeamed_grace_duration_and_stem():
+    systems = _one_system()
+    note = {
+        "xml_note_sequence": 1,
+        "xml_chord_sequence": 1,
+        "system": 1,
+        "staff": 1,
+        "voice": "1",
+        "xml_measure": 2,
+        "xml_measure_index": 2,
+        "system_measure_index": 0,
+        "x_norm": 0.4,
+        "bps_time": 1.0,
+        "end_bps_time": 1.125,
+        "note_id": 10,
+        "midi": 64,
+        "pitch_name": "E4",
+        "diatonic": 30,
+        "clef": {"sign": "G", "line": 2},
+        "is_grace": True,
+        "note_type": "eighth",
+        "stem": "up",
+        "beam_values": [],
+        "occurrences": [],
+    }
+    note_x, note_y = note_pixel_position(note, systems[0])
+    box = {
+        "txt_line": 1,
+        "class_id": 55,
+        "class": "flag8thUpSmall",
+        "x": (note_x + 9) / 1000,
+        "y": note_y / 400,
+        "w": 0.01,
+        "h": 0.04,
+    }
+
+    row = match_small_flags([box], [note], systems, 1000, 400)[0]
+
+    assert row["status"] == "matched"
+    assert row["start_note"] == 10
+    assert row["connected_note"] == "[10]"
+    assert row["end_meas"] == "1.125"
+
+
+def test_direction_matcher_uses_octave_span_and_pedal_endpoints():
+    systems = _one_system()
+    markers = [
+        {
+            "kind": "octave", "type": "down", "number": "1",
+            "system": 1, "staff": 1, "xml_measure": 2,
+            "xml_measure_index": 2, "system_measure_index": 0,
+            "x_norm": 0.2, "bps_time": 1.0, "occurrences": [],
+        },
+        {
+            "kind": "octave", "type": "stop", "number": "1",
+            "system": 1, "staff": 1, "xml_measure": 3,
+            "xml_measure_index": 3, "system_measure_index": 1,
+            "x_norm": 0.8, "bps_time": 2.0, "occurrences": [],
+        },
+        {
+            "kind": "pedal", "type": "stop", "number": "1",
+            "system": 1, "staff": 2, "xml_measure": 3,
+            "xml_measure_index": 3, "system_measure_index": 1,
+            "x_norm": 0.8, "bps_time": 2.0, "occurrences": [],
+        },
+        {
+            "kind": "wedge", "type": "crescendo", "number": "1",
+            "system": 1, "staff": 1, "xml_measure": 2,
+            "xml_measure_index": 2, "system_measure_index": 0,
+            "x_norm": 0.2, "bps_time": 1.0, "occurrences": [],
+        },
+        {
+            "kind": "wedge", "type": "stop", "number": "1",
+            "system": 1, "staff": 1, "xml_measure": 3,
+            "xml_measure_index": 3, "system_measure_index": 1,
+            "x_norm": 0.8, "bps_time": 2.0, "occurrences": [],
+        },
+    ]
+    notes = [
+        {
+            "xml_note_sequence": 1, "xml_chord_sequence": 1,
+            "system": 1, "staff": 1, "voice": "1", "xml_measure": 2,
+            "x_norm": 0.3, "bps_time": 1.2, "note_id": 10,
+            "midi": 64, "pitch_name": "E4", "diatonic": 30,
+            "clef": {"sign": "G", "line": 2}, "occurrences": [],
+        },
+        {
+            "xml_note_sequence": 2, "xml_chord_sequence": 2,
+            "system": 1, "staff": 1, "voice": "1", "xml_measure": 3,
+            "x_norm": 0.7, "bps_time": 1.8, "note_id": 11,
+            "midi": 67, "pitch_name": "G4", "diatonic": 32,
+            "clef": {"sign": "G", "line": 2}, "occurrences": [],
+        },
+    ]
+    boxes = [
+        {
+            "txt_line": 1, "class_id": 85, "class": "ottavaBracket",
+            "x": 0.5, "y": 0.15, "w": 0.48, "h": 0.03,
+        },
+        {
+            "txt_line": 2, "class_id": 59, "class": "keyboardPedalUp",
+            "x": 0.74, "y": 0.75, "w": 0.02, "h": 0.03,
+        },
+        {
+            "txt_line": 3, "class_id": 24,
+            "class": "dynamicCrescendoHairpin",
+            "x": 0.5, "y": 0.4, "w": 0.48, "h": 0.03,
+        },
+    ]
+
+    rows = match_direction_symbols(boxes, notes, markers, systems, 1000, 400)
+    by_class = {row["class"]: row for row in rows}
+
+    assert by_class["ottavaBracket"]["connected_note"] == "[10, 11]"
+    assert by_class["ottavaBracket"]["start_meas"] == "1.000"
+    assert by_class["ottavaBracket"]["end_meas"] == "2.000"
+    assert by_class["keyboardPedalUp"]["start_meas"] == "2.000"
+    assert by_class["keyboardPedalUp"]["start_note"] == ""
+    assert by_class["dynamicCrescendoHairpin"]["start_meas"] == "1.000"
+    assert by_class["dynamicCrescendoHairpin"]["end_meas"] == "2.000"
+    assert by_class["dynamicCrescendoHairpin"]["connected_note"] == "NA"
+
+
+def test_text_and_wavy_line_matchers_use_explicit_xml_evidence():
+    systems = _one_system()
+    text_events = [
+        {
+            "kind": "words",
+            "text": "a tempo",
+            "system": 1,
+            "staff": 1,
+            "xml_measure": 2,
+            "xml_measure_index": 2,
+            "system_measure_index": 0,
+            "x_norm": 0.5,
+            "bps_time": 1.0,
+            "repeat_occurrences": [],
+        }
+    ]
+    tempo_box = {
+        "txt_line": 1,
+        "class_id": 90,
+        "class": "tempoATempo",
+        "x": 0.5,
+        "y": 0.1,
+        "w": 0.1,
+        "h": 0.03,
+    }
+    text_row = match_text_directions(
+        [tempo_box], text_events, systems, 1000, 400
+    )[0]
+
+    note_base = {
+        "system": 1,
+        "staff": 1,
+        "voice": "1",
+        "xml_measure": 2,
+        "xml_measure_index": 2,
+        "system_measure_index": 0,
+        "clef": {"sign": "G", "line": 2},
+        "occurrences": [],
+    }
+    notes = [
+        {
+            **note_base,
+            "xml_note_sequence": 1,
+            "xml_chord_sequence": 1,
+            "x_norm": 0.3,
+            "bps_time": 1.0,
+            "note_id": 10,
+            "midi": 64,
+            "pitch_name": "E4",
+            "diatonic": 30,
+            "wavy_line_marks": [{"type": "start", "number": "1"}],
+        },
+        {
+            **note_base,
+            "xml_note_sequence": 2,
+            "xml_chord_sequence": 2,
+            "x_norm": 0.7,
+            "bps_time": 1.5,
+            "note_id": 11,
+            "midi": 67,
+            "pitch_name": "G4",
+            "diatonic": 32,
+            "wavy_line_marks": [{"type": "stop", "number": "1"}],
+        },
+    ]
+    first_x, _first_y = note_pixel_position(notes[0], systems[0])
+    last_x, _last_y = note_pixel_position(notes[1], systems[0])
+    wiggle_box = {
+        "txt_line": 2,
+        "class_id": 84,
+        "class": "ornamentWiggleTrill",
+        "x": ((first_x + last_x) / 2) / 1000,
+        "y": 0.15,
+        "w": abs(last_x - first_x) / 1000,
+        "h": 0.02,
+    }
+    wiggle_row = match_wavy_line_spans(
+        [wiggle_box], notes, systems, 1000, 400
+    )[0]
+
+    assert text_row["status"] == "matched"
+    assert text_row["start_meas"] == "1.000"
+    assert text_row["start_note"] == ""
+    assert wiggle_row["status"] == "matched"
+    assert wiggle_row["start_note"] == 10
+    assert wiggle_row["end_note"] == 11
+    assert wiggle_row["start_meas"] == "1.000"
+    assert wiggle_row["end_meas"] == "1.500"
 
 
 def test_parse_musicxml_accepts_official_doctype_without_resolving_it(tmp_path):
@@ -419,7 +856,7 @@ def test_parse_musicxml_snaps_dynamic_to_following_note_onset(tmp_path):
         <time><beats>3</beats><beat-type>4</beat-type></time>
       </attributes>
       <direction>
-        <direction-type><dynamics default-x="41"><f/></dynamics></direction-type>
+        <direction-type><dynamics default-x="41"><f/><mf/><sfz/></dynamics></direction-type>
         <offset sound="no">243</offset>
         <staff>1</staff>
       </direction>
@@ -447,6 +884,14 @@ def test_parse_musicxml_snaps_dynamic_to_following_note_onset(tmp_path):
     assert page["dynamics"][0]["onset"] == 512
     assert page["dynamics"][0]["onset_source"] == "following_note"
     assert round(page["dynamics"][0]["bps_time"], 3) == 28.667
+    assert [event["class"] for event in page["dynamics"]] == [
+        "dynamicF",
+        "dynamicM",
+        "dynamicF",
+        "dynamicS",
+        "dynamicF",
+        "dynamicZ",
+    ]
 
 
 def test_parse_musicxml_applies_mid_measure_clef_by_onset(tmp_path):
@@ -766,6 +1211,124 @@ def test_direct_notations_and_spans_receive_start_and_end_times():
     assert by_class["tie"]["end_meas"] == "2.500"
 
 
+def test_tuplet_requires_complete_note_ids_and_duration_times():
+    notes = [
+        _timed_note(index, 10.0 + index * 0.25, pitch, midi, 0.2 + index * 0.1)
+        for index, (pitch, midi) in enumerate(
+            [("G4", 67), ("A4", 69), ("B4", 71)]
+        )
+    ]
+    for index, note in enumerate(notes):
+        note["actual_notes"] = 3
+        note["end_bps_time"] = 10.25 + index * 0.25
+        note["tuplet_marks"] = (
+            [{"type": "start", "number": "1"}] if index == 0 else []
+        )
+    box = {
+        "txt_line": 1,
+        "class_id": 160,
+        "class": "tuplet3",
+        "x": 0.34,
+        "y": 0.20,
+        "w": 0.08,
+        "h": 0.03,
+    }
+
+    complete = match_tuplets([box], notes, _one_system(), 1000, 500)[0]
+    assert complete["status"] == "matched"
+    assert complete["xml_time_confirmed"] == "true"
+    assert complete["end_meas"] == "10.750"
+
+    notes[1]["end_bps_time"] = None
+    incomplete = match_tuplets([box], notes, _one_system(), 1000, 500)[0]
+    assert incomplete["status"] == "review"
+    assert incomplete["xml_time_confirmed"] == "false"
+
+
+def test_tie_with_equally_good_xml_targets_stays_in_review():
+    notes = [
+        _timed_note(0, 2.0, "C4", 60, 0.40, ties=[{"type": "start"}]),
+        _timed_note(1, 2.0, "C4", 60, 0.40, ties=[{"type": "start"}]),
+        _timed_note(2, 2.5, "C4", 60, 0.60, ties=[{"type": "stop"}]),
+        _timed_note(3, 2.5, "C4", 60, 0.60, ties=[{"type": "stop"}]),
+    ]
+    for index, note in enumerate(notes):
+        note["voice"] = "1" if index in {0, 2} else "2"
+        note["diatonic"] = 30
+    bps_notes = [
+        {
+            "note_id": note["note_id"],
+            "bps_time": note["bps_time"],
+            "end_time": note["bps_time"] + 0.25,
+            "midi": note["midi"],
+        }
+        for note in notes
+    ]
+    box = {
+        "txt_line": 1,
+        "class_id": 145,
+        "class": "tie",
+        "x": 0.50,
+        "y": 0.20,
+        "w": 0.16,
+        "h": 0.03,
+    }
+
+    row = match_xml_spans(
+        [box], notes, bps_notes, _one_system(), 1000, 500
+    )[0]
+
+    assert row["status"] == "review"
+    assert float(row["candidate_margin"]) < 0.08
+
+
+def test_cross_page_span_keeps_complete_endpoints_but_requires_review():
+    note = _timed_note(0, 10.0, "G4", 67, 0.70, xml_measure=10)
+    note["end_bps_time"] = 10.25
+    span = {
+        "span_id": "S:SPAN1",
+        "class": "slur",
+        "span_type": "slur",
+        "start_meas": "10.000",
+        "end_meas": "11.000",
+        "start_note": "0",
+        "end_note": "9",
+        "connected_note": "[0, 9]",
+        "start_page": "1",
+        "end_page": "2",
+        "start_xml_measure": "10",
+        "end_xml_measure": "11",
+        "start_staff": "1",
+        "end_staff": "1",
+        "cross_page": "true",
+        "status": "paired",
+    }
+    box = {
+        "txt_line": 1,
+        "class_id": 56,
+        "class": "slur",
+        "x": 0.82,
+        "y": 0.15,
+        "w": 0.14,
+        "h": 0.03,
+    }
+
+    row = match_cross_page_spans(
+        [box], [note], [span], 1, _one_system(), 1000, 500
+    )[0]
+
+    assert row["status"] == "review"
+    assert row["xml_time_confirmed"] == "true"
+    assert row["start_meas"] == "10.000"
+    assert row["end_meas"] == "11.000"
+    assert row["start_note"] == "0"
+    assert row["end_note"] == "9"
+    assert row["cross_page_span_id"] == "S:SPAN1"
+    assert row["start_xml_page"] == "1"
+    assert row["end_xml_page"] == "2"
+    assert row["match_source"] == "whole_score_cross_page_span_candidate"
+
+
 def test_cross_system_slur_segments_share_complete_xml_endpoints():
     systems = [
         SystemGeometry(
@@ -848,7 +1411,7 @@ def test_cross_system_slur_segments_share_complete_xml_endpoints():
     assert {row["status"] for row in rows} == {"review"}
 
 
-def test_unknown_class_receives_reviewable_geometry_time_estimate():
+def test_term_receives_reviewable_position_and_outside_timeline_flag():
     systems = [
         SystemGeometry(
             number=1,
@@ -867,6 +1430,7 @@ def test_unknown_class_receives_reviewable_geometry_time_estimate():
     assert row["end_meas"] == "3.250"
     assert row["status"] == "review"
     assert row["match_source"] == "geometric_nearest_anchor_time_estimate"
+    assert row["musical_time"] == 1
 
 
 def test_detect_systems_finds_paired_staves():
@@ -1418,7 +1982,7 @@ def test_all_symbol_policy_leaves_undocumented_flags_blank():
         image_height=400,
     )
 
-    assert rows[0]["musical_time"] == ""
+    assert rows[0]["musical_time"] == 0
     assert rows[1]["musical_time"] == 1
     assert rows[1]["start_note"] == "NA"
     assert rows[2]["musical_time"] == 0

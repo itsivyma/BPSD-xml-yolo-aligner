@@ -7,15 +7,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-
-DEFAULT_THRESHOLDS = {
-    "fingering": 0.95,
-    "slur": 0.82,
-    "tie": 0.60,
-    "articulation": 0.65,
-    "fermata": 0.65,
-    "tuplet": 0.60,
-}
+from bpsd_aligner.class_registry import DEFAULT_THRESHOLDS, threshold_family
 
 
 @lru_cache(maxsize=1)
@@ -39,12 +31,4 @@ def auto_accept_threshold(class_name: str, default: float) -> float:
     thresholds = configured_thresholds()
     if class_name in thresholds:
         return thresholds[class_name]
-    if class_name.startswith("fingering"):
-        return thresholds["fingering"]
-    if class_name.startswith("tuplet"):
-        return thresholds["tuplet"]
-    if class_name.startswith("fermata"):
-        return thresholds["fermata"]
-    if class_name.startswith("artic"):
-        return thresholds["articulation"]
-    return default
+    return thresholds.get(threshold_family(class_name), default)
