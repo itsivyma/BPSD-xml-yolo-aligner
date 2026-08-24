@@ -20,6 +20,7 @@ from bpsd_aligner.web_pipeline import (
 )
 from bpsd_aligner.job_store import request_job_cancellation, write_job_manifest
 from bpsd_aligner.web_worker import run_background_job
+from bpsd_aligner.provenance import pipeline_code_signature
 from pipeline_checkpoint import atomic_write_json
 
 
@@ -345,6 +346,7 @@ def test_background_worker_completes_and_resumes_page_checkpoint(tmp_path):
         job_dir,
         fingerprint=fingerprint,
         pipeline_version=PIPELINE_VERSION,
+        code_signature=pipeline_code_signature(),
         inputs=[],
     )
     request_path = job_dir / "job_request.json"
@@ -353,6 +355,7 @@ def test_background_worker_completes_and_resumes_page_checkpoint(tmp_path):
         {
             "schema_version": "1.0",
             "pipeline_version": PIPELINE_VERSION,
+            "code_signature": pipeline_code_signature(),
             "fingerprint": fingerprint,
             "job_dir": str(job_dir),
             "score_id": "background-test",

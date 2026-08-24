@@ -28,7 +28,6 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from defusedxml import ElementTree as SafeET
 from bpsd_aligner.bps_omr_schema import musical_time_for_class
 from bpsd_aligner.candidate_scoring import (
     greedy_pairs as _greedy_pairs,
@@ -41,6 +40,13 @@ from bpsd_aligner.geometry import (
     assign_system,
     detect_barlines,
     detect_systems,
+)
+from bpsd_aligner.musicxml import (
+    child as _xml_child,
+    children as _xml_children,
+    child_text as _xml_child_text,
+    local_name as _shared_local_name,
+    parse_musicxml,
 )
 from bpsd_aligner.overlay import (
     render_alignment_overlay,
@@ -141,6 +147,7 @@ DETAILED_OUTPUT_FIELDS = [
     "cross_page_span_id",
     "start_xml_page",
     "end_xml_page",
+    "review_candidate_set_id",
     "review_note_candidates_json",
 ]
 
@@ -162,6 +169,7 @@ SLUR_CANDIDATE_FIELDS = [
     "end_note_candidate",
     "start_note_match",
     "end_note_match",
+    "note_id_ambiguous",
     "orientation",
     "status",
 ]
@@ -180,11 +188,12 @@ TIE_CANDIDATE_FIELDS = [
     "end_note_candidate",
     "start_note_match",
     "end_note_match",
+    "note_id_ambiguous",
     "status",
 ]
 
 def _local_name(tag: str) -> str:
-    return tag.rsplit("}", 1)[-1]
+    return _shared_local_name(tag)
 
 
 def _float_text(element: ET.Element | None, default: float = 0.0) -> float:
@@ -247,9 +256,9 @@ def load_yolo(
 
 
 def _pitch_midi(pitch: ET.Element) -> tuple[int, str, int]:
-    step = (pitch.findtext("step") or "C").strip()
-    alter = _int_text(pitch.find("alter"), 0)
-    octave = _int_text(pitch.find("octave"), 4)
+    step = (_xml_child_text(pitch, "step", "C") or "C").strip()
+    alter = _int_text(_xml_child(pitch, "alter"), 0)
+    octave = _int_text(_xml_child(pitch, "octave"), 4)
     semitone = {
         "C": 0,
         "D": 2,
@@ -285,12 +294,7 @@ def parse_musicxml_page(
     note semantics still come from the corresponding MusicXML measures.
     """
 
-    root = SafeET.parse(
-        xml_path,
-        forbid_dtd=False,
-        forbid_entities=True,
-        forbid_external=True,
-    ).getroot()
+    root = parse_musicxml(xml_path)
     part = next(
         element for element in root.iter() if _local_name(element.tag) == "part"
     )
@@ -346,12 +350,12 @@ def parse_musicxml_page(
             None,
         )
         if attributes is not None:
-            if attributes.find("divisions") is not None:
-                divisions = _int_text(attributes.find("divisions"), divisions)
-            time_element = attributes.find("time")
+            if _xml_child(attributes, "divisions") is not None:
+                divisions = _int_text(_xml_child(attributes, "divisions"), divisions)
+            time_element = _xml_child(attributes, "time")
             if time_element is not None:
-                beats = _int_text(time_element.find("beats"), beats)
-                beat_type = _int_text(time_element.find("beat-type"), beat_type)
+                beats = _int_text(_xml_child(time_element, "beats"), beats)
+                beat_type = _int_text(_xml_child(time_element, "beat-type"), beat_type)
         nominal_duration = divisions * beats * 4 / beat_type
         cursor = 0.0
         max_cursor = 0.0
@@ -368,11 +372,11 @@ def parse_musicxml_page(
             name = _local_name(child.tag)
 
             if name == "attributes":
-                for clef in child.findall("clef"):
+                for clef in _xml_children(child, "clef"):
                     staff_number = int(clef.attrib.get("number", "1"))
                     clef_value = {
-                        "sign": clef.findtext("sign") or "G",
-                        "line": _int_text(clef.find("line"), 2),
+                        "sign": _xml_child_text(clef, "sign", "G") or "G",
+                        "line": _int_text(_xml_child(clef, "line"), 2),
                     }
                     clefs[staff_number] = clef_value
                     clef_events[staff_number].append(
@@ -380,18 +384,18 @@ def parse_musicxml_page(
                     )
 
             elif name == "backup":
-                cursor -= _float_text(child.find("duration"))
+                cursor -= _float_text(_xml_child(child, "duration"))
 
             elif name == "forward":
-                cursor += _float_text(child.find("duration"))
+                cursor += _float_text(_xml_child(child, "duration"))
                 max_cursor = max(max_cursor, cursor)
 
             elif name == "direction":
-                offset = _float_text(child.find("offset"))
+                offset = _float_text(_xml_child(child, "offset"))
                 onset = cursor + offset
-                staff = _int_text(child.find("staff"), 1)
-                for direction_type in child.findall("direction-type"):
-                    dynamics_element = direction_type.find("dynamics")
+                staff = _int_text(_xml_child(child, "staff"), 1)
+                for direction_type in _xml_children(child, "direction-type"):
+                    dynamics_element = _xml_child(direction_type, "dynamics")
                     if dynamics_element is not None:
                         default_x = float(
                             dynamics_element.attrib.get("default-x", "0")
@@ -420,7 +424,7 @@ def parse_musicxml_page(
                                     }
                                 )
 
-                    for words in direction_type.findall("words"):
+                    for words in _xml_children(direction_type, "words"):
                         text = (words.text or "").strip()
                         if text:
                             text_directions.append(
@@ -438,9 +442,9 @@ def parse_musicxml_page(
                                 }
                             )
 
-                    for metronome in direction_type.findall("metronome"):
-                        beat_unit = (metronome.findtext("beat-unit") or "").strip()
-                        per_minute = (metronome.findtext("per-minute") or "").strip()
+                    for metronome in _xml_children(direction_type, "metronome"):
+                        beat_unit = _xml_child_text(metronome, "beat-unit").strip()
+                        per_minute = _xml_child_text(metronome, "per-minute").strip()
                         text_directions.append(
                             {
                                 "kind": "metronome",
@@ -463,7 +467,7 @@ def parse_musicxml_page(
                         ("pedal", "pedal"),
                         ("wedge", "wedge"),
                     ):
-                        for marker in direction_type.findall(marker_name):
+                        for marker in _xml_children(direction_type, marker_name):
                             direction_markers.append(
                                 {
                                     "kind": marker_kind,
@@ -484,20 +488,20 @@ def parse_musicxml_page(
                             )
 
             elif name == "note":
-                is_chord = child.find("chord") is not None
-                grace_element = child.find("grace")
+                is_chord = _xml_child(child, "chord") is not None
+                grace_element = _xml_child(child, "grace")
                 if not is_chord:
                     current_chord_sequence = xml_chord_sequence
                     xml_chord_sequence += 1
-                duration = _float_text(child.find("duration"))
+                duration = _float_text(_xml_child(child, "duration"))
                 onset = last_note_onset if is_chord else cursor
                 if not is_chord:
                     last_note_onset = onset
                 default_x = float(child.attrib.get("default-x", last_note_x))
                 if not is_chord:
                     last_note_x = default_x
-                staff = _int_text(child.find("staff"), 1)
-                voice = (child.findtext("voice") or "1").strip()
+                staff = _int_text(_xml_child(child, "staff"), 1)
+                voice = (_xml_child_text(child, "voice", "1") or "1").strip()
                 note_clef = dict(
                     measure_start_clefs.get(
                         staff,
@@ -510,7 +514,7 @@ def parse_musicxml_page(
                 ):
                     if event_onset <= onset:
                         note_clef = dict(event_clef)
-                pitch = child.find("pitch")
+                pitch = _xml_child(child, "pitch")
                 if pitch is not None:
                     midi, pitch_name, diatonic = _pitch_midi(pitch)
                     slur_marks = []
@@ -520,7 +524,7 @@ def parse_musicxml_page(
                     wavy_line_marks = []
                     fermata_marks = []
                     tuplet_marks = []
-                    notations = child.find("notations")
+                    notations = _xml_child(child, "notations")
                     if notations is not None:
                         for notation in notations:
                             notation_name = _local_name(notation.tag)
@@ -581,21 +585,21 @@ def parse_musicxml_page(
                                         ),
                                     }
                                 )
-                    time_modification = child.find("time-modification")
+                    time_modification = _xml_child(child, "time-modification")
                     actual_notes = (
-                        _int_text(time_modification.find("actual-notes"), 0)
+                        _int_text(_xml_child(time_modification, "actual-notes"), 0)
                         if time_modification is not None
                         else 0
                     )
                     normal_notes = (
-                        _int_text(time_modification.find("normal-notes"), 0)
+                        _int_text(_xml_child(time_modification, "normal-notes"), 0)
                         if time_modification is not None
                         else 0
                     )
                     if not tie_marks:
                         tie_marks = [
                             {"type": tie.attrib.get("type", "")}
-                            for tie in child.findall("tie")
+                            for tie in _xml_children(child, "tie")
                         ]
                     notes.append(
                         {
@@ -610,7 +614,7 @@ def parse_musicxml_page(
                             "diatonic": diatonic,
                             "measure_x": default_x,
                             "clef": note_clef,
-                            "stem": (child.findtext("stem") or "").strip(),
+                            "stem": _xml_child_text(child, "stem").strip(),
                             "slur_marks": slur_marks,
                             "tie_marks": tie_marks,
                             "articulation_marks": articulation_marks,
@@ -620,11 +624,11 @@ def parse_musicxml_page(
                             "tuplet_marks": tuplet_marks,
                             "actual_notes": actual_notes,
                             "normal_notes": normal_notes,
-                            "accidental": (child.findtext("accidental") or "").strip(),
-                            "note_type": (child.findtext("type") or "").strip(),
+                            "accidental": _xml_child_text(child, "accidental").strip(),
+                            "note_type": _xml_child_text(child, "type").strip(),
                             "beam_values": [
                                 (beam.text or "").strip()
-                                for beam in child.findall("beam")
+                                for beam in _xml_children(child, "beam")
                             ],
                             "is_grace": grace_element is not None,
                             "grace_slash": (
@@ -634,9 +638,9 @@ def parse_musicxml_page(
                         }
                     )
                     xml_note_sequence += 1
-                elif child.find("rest") is not None:
+                elif _xml_child(child, "rest") is not None:
                     fermata_marks = []
-                    notations = child.find("notations")
+                    notations = _xml_child(child, "notations")
                     if notations is not None:
                         for notation in notations:
                             if _local_name(notation.tag) == "fermata":
@@ -996,6 +1000,10 @@ def attach_bps_note_ids(xml_notes: list[dict], bps_notes: list[dict]) -> None:
             note
         )
 
+    xml_key_counts: dict[tuple[float, int], int] = defaultdict(int)
+    for note in xml_notes:
+        xml_key_counts[(round(note["bps_time"], 3), note["midi"])] += 1
+
     for note in sorted(
         xml_notes,
         key=lambda item: (
@@ -1006,8 +1014,14 @@ def attach_bps_note_ids(xml_notes: list[dict], bps_notes: list[dict]) -> None:
         ),
     ):
         key = (round(note["bps_time"], 3), note["midi"])
-        matched = by_time_pitch[key].popleft() if by_time_pitch[key] else None
+        candidates = by_time_pitch[key]
+        ambiguous = len(candidates) > 1 or xml_key_counts[key] > 1
+        # Keep a stable provisional one-to-one ID for repeat traversal and
+        # geometry. Ambiguity is carried separately so strict output can
+        # abstain without changing the candidate set or musical time.
+        matched = candidates.popleft() if candidates else None
         note["note_id"] = matched["note_id"] if matched else None
+        note["note_id_ambiguous"] = ambiguous
         note["end_bps_time"] = (
             matched.get("end_time", matched["bps_time"]) if matched else None
         )
@@ -1036,6 +1050,8 @@ def attach_bps_note_ids(xml_notes: list[dict], bps_notes: list[dict]) -> None:
             )
             note["note_id"] = best["note_id"]
             note["end_bps_time"] = best.get("end_time", best["bps_time"])
+            if len(spanning) > 1:
+                note["note_id_ambiguous"] = True
 
 
 def attach_repeat_occurrences(
@@ -1324,9 +1340,14 @@ def build_slur_candidates(
     for index, (start_note, end_note, start_mark) in enumerate(pairs, start=1):
         start_match = _note_match_status(start_note, bps_by_id)
         end_match = _note_match_status(end_note, bps_by_id)
+        note_id_ambiguous = bool(
+            start_note.get("note_id_ambiguous")
+            or end_note.get("note_id_ambiguous")
+        )
         status = (
             "time_confirmed"
-            if start_match in {"exact", "within_tied_span"}
+            if not note_id_ambiguous
+            and start_match in {"exact", "within_tied_span"}
             and end_match in {"exact", "within_tied_span"}
             else "review"
         )
@@ -1357,6 +1378,7 @@ def build_slur_candidates(
                 ),
                 "start_note_match": start_match,
                 "end_note_match": end_match,
+                "note_id_ambiguous": note_id_ambiguous,
                 "orientation": start_mark.get("orientation", ""),
                 "status": status,
             }
@@ -1449,9 +1471,14 @@ def build_tie_candidates(
     for index, (start_note, end_note) in enumerate(pairs, start=1):
         start_match = _note_match_status(start_note, bps_by_id)
         end_match = _note_match_status(end_note, bps_by_id)
+        note_id_ambiguous = bool(
+            start_note.get("note_id_ambiguous")
+            or end_note.get("note_id_ambiguous")
+        )
         status = (
             "time_confirmed"
-            if start_match in {"exact", "within_tied_span"}
+            if not note_id_ambiguous
+            and start_match in {"exact", "within_tied_span"}
             and end_match in {"exact", "within_tied_span"}
             else "review"
         )
@@ -1470,6 +1497,7 @@ def build_tie_candidates(
                 "end_note_candidate": end_note.get("note_id", ""),
                 "start_note_match": start_match,
                 "end_note_match": end_match,
+                "note_id_ambiguous": note_id_ambiguous,
                 "status": status,
             }
         )
@@ -2344,7 +2372,8 @@ def match_fingerings(
 
         for box, note_item in pairs:
             note, note_x, note_y = note_item
-            note_id = note["note_id"]
+            note_id = note.get("note_id")
+            ambiguous_note_id = bool(note.get("note_id_ambiguous"))
             occurrence_note_ids = [
                 occurrence["note_id"]
                 for occurrence in note.get("occurrences", [])
@@ -2357,9 +2386,11 @@ def match_fingerings(
                 {
                     "start_meas": f"{note['bps_time']:.3f}",
                     "end_meas": f"{note['bps_time']:.3f}",
-                    "start_note": note_id,
-                    "end_note": note_id,
-                    "connected_note": f"[{note_id}]",
+                    "start_note": note_id if note_id is not None else "NA",
+                    "end_note": note_id if note_id is not None else "NA",
+                    "connected_note": (
+                        f"[{note_id}]" if note_id is not None else "NA"
+                    ),
                     "xml_measure": note["xml_measure"],
                     "xml_symbol": note["pitch_name"],
                     "xml_staff": note["staff"],
@@ -2377,20 +2408,26 @@ def match_fingerings(
                         note.get("occurrences", [])
                     ),
                     "match_source": (
-                        "grouped_nearest_musicxml_bps_note_ambiguous_chord"
+                        "grouped_nearest_musicxml_note_ambiguous_bps_unison"
+                        if ambiguous_note_id
+                        else "grouped_nearest_musicxml_bps_note_ambiguous_chord"
                         if ambiguous_chord_member
                         else "grouped_nearest_musicxml_bps_note_staff_mismatch"
                         if staff_side_mismatch
                         else "grouped_nearest_musicxml_bps_note"
                     ),
-                    "confidence": f"{confidence:.3f}",
-                    "match_score": f"{confidence:.3f}",
+                    "confidence": (
+                        f"{min(confidence, 0.69) if ambiguous_note_id else confidence:.3f}"
+                    ),
+                    "match_score": (
+                        f"{min(confidence, 0.69) if ambiguous_note_id else confidence:.3f}"
+                    ),
                     "confidence_calibrated": "false",
                     "geometry_score": f"{x_quality:.3f}",
                     "candidate_margin": f"{ambiguity_quality:.3f}",
                     "count_agreement": "1.000",
                     "xml_time_confirmed": "true",
-                    "status": status,
+                    "status": "review" if ambiguous_note_id else status,
                     "target_x_px": f"{note_x:.1f}",
                     "target_y_px": f"{note_y:.1f}",
                 }
@@ -4094,6 +4131,7 @@ def match_xml_spans(
                 box_best = best_target is target
             candidate = target["candidate"]
             confirmed = candidate["status"] == "time_confirmed"
+            note_id_ambiguous = bool(candidate.get("note_id_ambiguous"))
             status = (
                 "matched"
                 if (
@@ -4119,8 +4157,10 @@ def match_xml_spans(
                     target["end"],
                     match_source=(
                         f"musicxml_slur_{target.get('segment_type', 'full')}_endpoint_candidate"
+                        + ("_ambiguous_bps_unison" if note_id_ambiguous else "")
                         if class_name == "slur"
                         else "musicxml_tie_endpoints"
+                        + ("_ambiguous_bps_unison" if note_id_ambiguous else "")
                     ),
                     confidence=confidence,
                     status=status,
@@ -4790,6 +4830,14 @@ def run_alignment(
     review_overlay = qa_dir / f"{page_stem}_needs_review.png"
     report_path = qa_dir / f"{page_stem}_report.json"
 
+    from bpsd_aligner.review_candidates import normalize_review_candidates
+
+    review_candidates_path, review_candidate_sets_path = normalize_review_candidates(
+        rows,
+        page_id=page_stem,
+        output_dir=output_dir,
+    )
+
     write_csv(csv_path, rows)
     write_detailed_csv(detailed_csv_path, rows)
     if render_qa_images and render_auxiliary_overlays:
@@ -4911,6 +4959,8 @@ def run_alignment(
         "outputs": {
             "csv": str(csv_path),
             "detailed_csv": str(detailed_csv_path),
+            "review_note_candidates_csv": str(review_candidates_path),
+            "review_candidate_sets_csv": str(review_candidate_sets_path),
             "dynamics_overlay": (
                 str(dynamics_overlay)
                 if render_qa_images and render_auxiliary_overlays

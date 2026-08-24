@@ -801,6 +801,45 @@ def test_build_tie_candidates_pairs_same_staff_voice_and_pitch():
     assert candidates[0]["status"] == "time_confirmed"
 
 
+def test_build_tie_candidates_requires_review_for_ambiguous_unison_endpoint():
+    notes = [
+        {
+            "xml_note_sequence": 0,
+            "bps_time": 2.0,
+            "midi": 60,
+            "pitch_name": "C4",
+            "staff": 1,
+            "voice": "1",
+            "system": 1,
+            "xml_measure": 3,
+            "note_id": 12,
+            "note_id_ambiguous": True,
+            "tie_marks": [{"type": "start"}],
+        },
+        {
+            "xml_note_sequence": 1,
+            "bps_time": 2.5,
+            "midi": 60,
+            "pitch_name": "C4",
+            "staff": 1,
+            "voice": "1",
+            "system": 1,
+            "xml_measure": 4,
+            "note_id": 12,
+            "tie_marks": [{"type": "stop"}],
+        },
+    ]
+    bps_notes = [
+        {"note_id": 12, "bps_time": 2.0, "end_time": 3.0, "midi": 60},
+    ]
+
+    candidates, issues = build_tie_candidates(notes, bps_notes)
+
+    assert issues == []
+    assert candidates[0]["note_id_ambiguous"] is True
+    assert candidates[0]["status"] == "review"
+
+
 def test_build_tie_candidates_allows_unique_cross_voice_pair():
     notes = [
         {
@@ -989,6 +1028,47 @@ def test_attach_bps_note_ids_reuses_tied_note_span():
     assert xml_notes[0]["note_id"] == 12
 
 
+def test_attach_bps_note_ids_marks_same_time_same_pitch_unison_ambiguous():
+    xml_notes = [
+        {"bps_time": 1.0, "midi": 60, "staff": 1, "x_norm": 0.2},
+        {"bps_time": 1.0, "midi": 60, "staff": 2, "x_norm": 0.2},
+    ]
+    bps_notes = [
+        {"note_id": 10, "bps_time": 1.0, "midi": 60},
+        {"note_id": 11, "bps_time": 1.0, "midi": 60},
+    ]
+
+    attach_bps_note_ids(xml_notes, bps_notes)
+
+    assert [note["note_id"] for note in xml_notes] == [10, 11]
+    assert all(note["note_id_ambiguous"] for note in xml_notes)
+
+
+def test_parse_musicxml_page_supports_default_namespace(tmp_path):
+    xml_path = tmp_path / "namespaced.xml"
+    xml_path.write_text(
+        """<?xml version="1.0"?>
+<score-partwise xmlns="http://www.musicxml.org/ns/musicxml">
+  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+  <part id="P1"><measure number="1" width="100">
+    <attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>
+    <note default-x="10"><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><voice>1</voice><staff>1</staff>
+      <notations><slur type="start" number="1"/></notations>
+    </note>
+  </measure></part>
+</score-partwise>""",
+        encoding="utf-8",
+    )
+
+    page = parse_musicxml_page(xml_path, page_number=1)
+
+    assert len(page["notes"]) == 1
+    assert page["notes"][0]["pitch_name"] == "C4"
+    assert page["notes"][0]["slur_marks"] == [
+        {"type": "start", "number": "1", "orientation": ""}
+    ]
+
+
 def test_build_slur_candidates_pairs_endpoints_and_keeps_bps_time():
     xml_notes = [
         {
@@ -1052,6 +1132,46 @@ def test_build_slur_candidates_pairs_endpoints_and_keeps_bps_time():
     assert candidates[0]["start_pitch"] == "G4"
     assert candidates[0]["end_pitch"] == "F#4"
     assert candidates[0]["status"] == "time_confirmed"
+
+
+def test_build_slur_candidates_requires_review_for_ambiguous_unison_endpoint():
+    xml_notes = [
+        {
+            "xml_note_sequence": 0,
+            "bps_time": 1.0,
+            "midi": 67,
+            "pitch_name": "G4",
+            "staff": 1,
+            "voice": "1",
+            "system": 1,
+            "xml_measure": 2,
+            "note_id": 9,
+            "note_id_ambiguous": True,
+            "slur_marks": [{"type": "start", "number": "1"}],
+        },
+        {
+            "xml_note_sequence": 1,
+            "bps_time": 1.5,
+            "midi": 66,
+            "pitch_name": "F#4",
+            "staff": 1,
+            "voice": "1",
+            "system": 1,
+            "xml_measure": 2,
+            "note_id": 12,
+            "slur_marks": [{"type": "stop", "number": "1"}],
+        },
+    ]
+    bps_notes = [
+        {"note_id": 9, "bps_time": 1.0, "end_time": 1.5, "midi": 67},
+        {"note_id": 12, "bps_time": 1.5, "end_time": 1.667, "midi": 66},
+    ]
+
+    candidates, issues = build_slur_candidates(xml_notes, bps_notes)
+
+    assert issues == []
+    assert candidates[0]["note_id_ambiguous"] is True
+    assert candidates[0]["status"] == "review"
 
 
 def test_build_slur_candidates_reports_unpaired_endpoints():

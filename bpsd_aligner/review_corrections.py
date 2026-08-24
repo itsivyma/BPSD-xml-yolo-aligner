@@ -108,6 +108,12 @@ def _equivalent(field: str, actual: object, expected: object) -> bool:
     return actual_text == expected_text
 
 
+def field_values_equivalent(field: str, actual: object, expected: object) -> bool:
+    """Compare one normalized semantic field for evaluation/calibration."""
+
+    return _equivalent(field, actual, expected)
+
+
 def normalize_legacy_review_rows(paths: list[Path]) -> tuple[list[dict], list[str]]:
     """Convert heterogeneous class-specific human CSVs to one ground truth."""
 

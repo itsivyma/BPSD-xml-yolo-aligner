@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from collections import Counter
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -25,11 +24,14 @@ from bpsd_aligner.web_pipeline import (
     FINAL_BPS_FIELDS,
     PIPELINE_VERSION,
     build_batch_information_outputs,
+    finalize_uploaded_batch,
     prepare_score_sources,
     run_uploaded_alignment,
     safe_identifier,
 )
 from bpsd_aligner.pdf_utils import pdf_page_count, render_pdf_page
+from bpsd_aligner.overlay import render_alignment_overlay
+from bpsd_aligner.provenance import alignment_runtime_identity, pipeline_code_signature
 from bpsd_aligner.job_store import (
     acquire_job_lease,
     build_job_checkpoint_archive,
@@ -60,6 +62,17 @@ from bpsd_aligner.review_corrections import (
     render_review_focus_images,
 )
 from bpsd_aligner.review_dataset import REVIEW_SAMPLE_FIELDS, build_review_samples
+from bpsd_aligner.review_candidates import hydrate_review_candidates
+from bpsd_aligner.review_workspace import (
+    candidate_note_id as _candidate_note_id,
+    candidate_printed_measure as _candidate_printed_measure,
+    endpoint_note_input_value as _endpoint_note_input_value,
+    fill_missing_note_orders as _fill_missing_note_orders,
+    merge_page_note_candidates as _merge_page_note_candidates,
+    resolve_endpoint_note_input as _resolve_endpoint_note_input,
+    review_note_label as _review_note_label,
+    snap_click_to_note_candidate as _snap_click_to_note_candidate,
+)
 from bpsd_aligner.web_utils import (
     apply_page_mapping_edits,
     group_review_overlays,
@@ -69,7 +82,6 @@ from bpsd_aligner.web_utils import (
     summarize_rows,
     upload_destination,
 )
-from bps_xml_alignment import render_overlay
 from combine_yolo_xml import combine_dataset
 from pipeline_checkpoint import atomic_write_csv, atomic_write_json
 
@@ -185,7 +197,11 @@ def _save_upload(
 
 
 def _upload_fingerprint(uploaded_files: list, options: dict) -> str:
-    digest = hashlib.sha256(json.dumps(options, sort_keys=True).encode())
+    identity = {
+        **options,
+        **alignment_runtime_identity(),
+    }
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode())
     for uploaded in uploaded_files:
         if uploaded is None:
             continue
@@ -282,6 +298,7 @@ def _queue_background_job(
         job_dir,
         fingerprint=fingerprint,
         pipeline_version=PIPELINE_VERSION,
+        code_signature=pipeline_code_signature(),
         owner_id=owner_id,
         inputs=[
             {"name": Path(uploaded.name).name, "size": int(uploaded.size)}
@@ -299,6 +316,7 @@ def _queue_background_job(
     request = {
         "schema_version": "1.0",
         "pipeline_version": PIPELINE_VERSION,
+        "code_signature": pipeline_code_signature(),
         "fingerprint": fingerprint,
         "owner_id": owner_id,
         "job_dir": str(job_dir),
@@ -321,19 +339,34 @@ def _queue_background_job(
         total_pages=len(page_pairs),
         message="Waiting for a background worker slot.",
     )
-    log_path = job_dir / "worker.log"
-    with log_path.open("ab") as log:
-        process = subprocess.Popen(
-            [sys.executable, "-m", "bpsd_aligner.web_worker", str(request_path)],
-            cwd=Path(__file__).parents[1],
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
+    dispatcher_lock = job_dir.parent / ".dispatcher.lock"
+    dispatcher_live = False
+    try:
+        dispatcher = json.loads(dispatcher_lock.read_text(encoding="utf-8"))
+        os.kill(int(dispatcher.get("pid", -1)), 0)
+        dispatcher_live = True
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        dispatcher_lock.unlink(missing_ok=True)
+    if not dispatcher_live:
+        log_path = job_dir.parent / "dispatcher.log"
+        with log_path.open("ab") as log:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "bpsd_aligner.job_dispatcher",
+                    "--job-dir",
+                    str(job_dir.parent),
+                ],
+                cwd=Path(__file__).parents[1],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        atomic_write_json(
+            dispatcher_lock,
+            {"pid": process.pid, "log": str(log_path)},
         )
-    atomic_write_json(
-        job_dir / "worker_process.json",
-        {"pid": process.pid, "request": str(request_path), "log": str(log_path)},
-    )
     return job_dir
 
 
@@ -364,6 +397,8 @@ def _load_background_result(job_dir: Path, fingerprint: str) -> dict:
         "xml_spans_csv",
         "performance_expanded_timeline_csv",
         "detailed_csv",
+        "review_note_candidates_csv",
+        "review_candidate_sets_csv",
         "validation_json",
         "output_zip",
         "job_checkpoint_zip",
@@ -373,6 +408,11 @@ def _load_background_result(job_dir: Path, fingerprint: str) -> dict:
         raise ValueError("background result is incomplete: " + ", ".join(missing))
     _fields, detailed_rows = read_csv_bytes(
         Path(result["detailed_csv"]).read_bytes()
+    )
+    hydrate_review_candidates(
+        detailed_rows,
+        Path(result["review_note_candidates_csv"]),
+        Path(result["review_candidate_sets_csv"]),
     )
     return {
         **{key: value for key, value in result.items() if key != "detailed_csv"},
@@ -486,6 +526,17 @@ def _page_checkpoint_artifacts(
     outputs = {name: Path(path) for name, path in report["outputs"].items()}
     final_rows = read_csv_bytes(outputs["final_bps_csv"].read_bytes())[1]
     detailed_rows = read_csv_bytes(outputs["detailed_csv"].read_bytes())[1]
+    review_candidate_rows = read_csv_bytes(
+        outputs["review_note_candidates_csv"].read_bytes()
+    )[1]
+    review_candidate_set_rows = read_csv_bytes(
+        outputs["review_candidate_sets_csv"].read_bytes()
+    )[1]
+    hydrate_review_candidates(
+        detailed_rows,
+        outputs["review_note_candidates_csv"],
+        outputs["review_candidate_sets_csv"],
+    )
     for row in detailed_rows:
         row["page_id"] = page_id
         row["page_number"] = str(page_number)
@@ -503,6 +554,8 @@ def _page_checkpoint_artifacts(
         "report": report,
         "final_rows": final_rows,
         "detailed_rows": detailed_rows,
+        "review_candidate_rows": review_candidate_rows,
+        "review_candidate_set_rows": review_candidate_set_rows,
         "yolo_rows": read_csv_bytes(outputs["yolo_aligned_csv"].read_bytes())[1],
         "xml_event_rows": read_csv_bytes(outputs["xml_events_csv"].read_bytes())[1],
         "xml_node_rows": read_csv_bytes(outputs["xml_nodes_csv"].read_bytes())[1],
@@ -527,7 +580,16 @@ def _class_overlay_on_demand(image_data: bytes, rows_json: str) -> bytes:
 
     image = Image.open(io.BytesIO(image_data)).convert("RGB")
     rows = json.loads(rows_json)
-    rendered = render_overlay(image, rows, mode="class")
+    rendered = render_alignment_overlay(
+        image,
+        rows,
+        mode="class",
+        dynamic_classes={
+            str(row.get("class", ""))
+            for row in rows
+            if str(row.get("class", "")).startswith("dynamic")
+        },
+    )
     buffer = io.BytesIO()
     rendered.save(buffer, format="PNG")
     return buffer.getvalue()
@@ -868,222 +930,6 @@ def _render_review_outputs(job: dict) -> None:
                 caption=image_name,
                 use_container_width=True,
             )
-
-
-def _candidate_printed_measure(candidate: dict) -> str:
-    """Return the scan/printed measure label used by the review UI.
-
-    New results carry this explicitly. The conservative fallback repairs
-    older pickup-score results only when BPSD time and XML measure differ by
-    at most one; large repeat-expanded differences must not be guessed.
-    """
-
-    explicit = str(candidate.get("printed_measure", "") or "").strip()
-    if explicit:
-        return explicit
-    xml_measure = str(candidate.get("xml_measure", "") or "").strip()
-    try:
-        timeline_measure = str(int(float(candidate.get("start_meas", ""))))
-        if xml_measure and abs(int(xml_measure) - int(timeline_measure)) <= 1:
-            return timeline_measure
-    except (TypeError, ValueError):
-        pass
-    return xml_measure
-
-
-def _review_note_label(candidate: dict) -> str:
-    """Describe a note without requiring the reviewer to know its BPSD ID."""
-
-    staff = str(candidate.get("staff", ""))
-    staff_label = {"1": "上 staff", "2": "下 staff"}.get(
-        staff, f"staff {staff or '—'}"
-    )
-    order = candidate.get("measure_note_order")
-    order_label = f"第 {order} 個音" if str(order or "").strip() else "音符"
-    return (
-        f"第 {_candidate_printed_measure(candidate) or '—'} 小節 · "
-        f"{staff_label} · "
-        f"{candidate.get('pitch') or '音高不明'} · {order_label}"
-    )
-
-
-def _fill_missing_note_orders(candidates: list[dict]) -> None:
-    """Backfill measure-local note order for results made by older versions."""
-
-    groups: dict[tuple[str, str, str], list[dict]] = {}
-    for candidate in candidates:
-        groups.setdefault(
-            (
-                str(candidate.get("page_id", "")),
-                _candidate_printed_measure(candidate),
-                str(candidate.get("staff", "")),
-            ),
-            [],
-        ).append(candidate)
-    for group in groups.values():
-        group.sort(
-            key=lambda candidate: (
-                float(candidate.get("x_px", 0) or 0),
-                float(candidate.get("y_px", 0) or 0),
-                str(candidate.get("note_id", "")),
-            )
-        )
-        for order, candidate in enumerate(group, start=1):
-            candidate.setdefault("measure_note_order", order)
-
-
-def _merge_page_note_candidates(
-    current_candidates: list[dict], detailed_rows: list[dict], page_id: str
-) -> list[dict]:
-    """Recover a page-wide index from local candidates in legacy results."""
-
-    merged = []
-    seen = set()
-    candidate_groups = [current_candidates]
-    for row in detailed_rows:
-        if str(row.get("page_id", "")) != str(page_id):
-            continue
-        try:
-            row_candidates = json.loads(
-                str(row.get("review_note_candidates_json", "") or "[]")
-            )
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row_candidates, list):
-            candidate_groups.append(row_candidates)
-    for group in candidate_groups:
-        for candidate in group:
-            if not isinstance(candidate, dict):
-                continue
-            sequence = str(candidate.get("xml_note_sequence", "")).strip()
-            identity = (
-                ("sequence", sequence)
-                if sequence
-                else (
-                    "geometry",
-                    str(candidate.get("note_id", "")),
-                    str(candidate.get("xml_measure", "")),
-                    str(candidate.get("printed_measure", "")),
-                    str(candidate.get("staff", "")),
-                    str(candidate.get("pitch", "")),
-                    str(candidate.get("x_px", "")),
-                    str(candidate.get("y_px", "")),
-                )
-            )
-            if identity in seen:
-                continue
-            seen.add(identity)
-            prepared = dict(candidate)
-            prepared.setdefault("page_id", str(page_id))
-            merged.append(prepared)
-    return merged
-
-
-def _endpoint_note_input_value(candidate: dict | None) -> str:
-    if candidate is None:
-        return ""
-    staff = {"1": "上", "2": "下"}.get(
-        str(candidate.get("staff", "")), str(candidate.get("staff", ""))
-    )
-    return ", ".join(
-        [
-            _candidate_printed_measure(candidate),
-            staff,
-            str(candidate.get("pitch", "")),
-            str(candidate.get("measure_note_order", "")),
-        ]
-    )
-
-
-def _candidate_note_id(candidate: dict | None) -> str:
-    if candidate is None or candidate.get("note_id") is None:
-        return ""
-    return str(candidate["note_id"])
-
-
-def _normalize_pitch(value: object) -> str:
-    return str(value or "").strip().replace("♯", "#").replace("♭", "b").upper()
-
-
-def _resolve_endpoint_note_input(
-    value: str, candidates: list[dict]
-) -> tuple[dict | None, str]:
-    """Resolve `measure, staff, pitch, order` into one XML/BPSD note."""
-
-    compact = str(value).strip()
-    if not compact:
-        return None, ""
-    parts = [part.strip() for part in re.split(r"[,，/|]", compact)]
-    if len(parts) != 4:
-        return None, "請輸入四項：小節, staff, 音高, 第幾個音"
-    measure = re.sub(r"^(第)?|小節$", "", parts[0]).strip()
-    staff_text = parts[1].lower().replace("staff", "").strip()
-    staff = {"上": "1", "upper": "1", "下": "2", "lower": "2"}.get(
-        staff_text, staff_text
-    )
-    pitch = _normalize_pitch(parts[2])
-    order = re.sub(r"^(第)?|個音$|音$", "", parts[3]).strip()
-    matches = [
-        candidate
-        for candidate in candidates
-        if _candidate_printed_measure(candidate) == measure
-        and str(candidate.get("staff", "")) == staff
-        and _normalize_pitch(candidate.get("pitch")) == pitch
-        and str(candidate.get("measure_note_order", "")) == order
-    ]
-    if len(matches) == 1:
-        return matches[0], ""
-    if len(matches) > 1:
-        return None, "找到多個相同音符，請確認該小節第幾個音"
-    return None, "找不到這個音符，請檢查小節、staff、音高與順序"
-
-
-def _snap_click_to_note_candidate(
-    click: dict,
-    candidates: list[dict],
-    crop_geometry: dict,
-    *,
-    max_display_distance: float = 42.0,
-) -> tuple[dict | None, float | None]:
-    """Snap a displayed-image click to the nearest XML notehead candidate."""
-
-    try:
-        click_x = float(click["x"])
-        click_y = float(click["y"])
-        display_width = float(click["width"])
-        display_height = float(click["height"])
-        crop_width = float(crop_geometry["width"])
-        crop_height = float(crop_geometry["height"])
-        crop_left = float(crop_geometry["left"])
-        crop_top = float(crop_geometry["top"])
-    except (KeyError, TypeError, ValueError):
-        return None, None
-    if min(display_width, display_height, crop_width, crop_height) <= 0:
-        return None, None
-
-    closest = None
-    closest_distance = None
-    for candidate in candidates:
-        try:
-            displayed_x = (
-                (float(candidate["x_px"]) - crop_left)
-                * display_width
-                / crop_width
-            )
-            displayed_y = (
-                (float(candidate["y_px"]) - crop_top)
-                * display_height
-                / crop_height
-            )
-        except (KeyError, TypeError, ValueError):
-            continue
-        distance = ((click_x - displayed_x) ** 2 + (click_y - displayed_y) ** 2) ** 0.5
-        if closest_distance is None or distance < closest_distance:
-            closest = candidate
-            closest_distance = distance
-    if closest_distance is None or closest_distance > max_display_distance:
-        return None, closest_distance
-    return closest, closest_distance
 
 
 def _handle_note_image_click(
@@ -2611,6 +2457,7 @@ with align_tab:
                                     temporary_path,
                                     expected_fingerprint=fingerprint,
                                     expected_pipeline_version=PIPELINE_VERSION,
+                                    expected_code_signature=pipeline_code_signature(),
                                 )
                             except Exception:
                                 release_job_lease(lease_path)
@@ -2666,6 +2513,7 @@ with align_tab:
                                 temporary_path,
                                 fingerprint=fingerprint,
                                 pipeline_version=PIPELINE_VERSION,
+                                code_signature=pipeline_code_signature(),
                                 owner_id=options["owner_id"],
                                 inputs=[
                                     {
@@ -2726,6 +2574,8 @@ with align_tab:
                             page_reports = []
                             final_entries = []
                             detailed_rows = []
+                            review_candidate_rows = []
+                            review_candidate_set_rows = []
                             yolo_entries = []
                             xml_event_rows = []
                             xml_node_rows = []
@@ -2766,6 +2616,12 @@ with align_tab:
                                             (pair["page_number"], row_index, row)
                                         )
                                     detailed_rows.extend(checkpoint["detailed_rows"])
+                                    review_candidate_rows.extend(
+                                        checkpoint.get("review_candidate_rows", [])
+                                    )
+                                    review_candidate_set_rows.extend(
+                                        checkpoint.get("review_candidate_set_rows", [])
+                                    )
                                     for row_index, row in enumerate(
                                         checkpoint.get("yolo_rows", [])
                                     ):
@@ -2895,10 +2751,25 @@ with align_tab:
                                 page_detailed = read_csv_bytes(
                                     page_outputs["detailed_csv"].read_bytes()
                                 )[1]
+                                hydrate_review_candidates(
+                                    page_detailed,
+                                    page_outputs["review_note_candidates_csv"],
+                                    page_outputs["review_candidate_sets_csv"],
+                                )
                                 for row in page_detailed:
                                     row["page_id"] = pair["stem"]
                                     row["page_number"] = str(pair["page_number"])
                                 detailed_rows.extend(page_detailed)
+                                page_review_candidates = read_csv_bytes(
+                                    page_outputs["review_note_candidates_csv"].read_bytes()
+                                )[1]
+                                page_review_candidate_sets = read_csv_bytes(
+                                    page_outputs["review_candidate_sets_csv"].read_bytes()
+                                )[1]
+                                review_candidate_rows.extend(page_review_candidates)
+                                review_candidate_set_rows.extend(
+                                    page_review_candidate_sets
+                                )
                                 page_yolo_rows = read_csv_bytes(
                                     page_outputs["yolo_aligned_csv"].read_bytes()
                                 )[1]
@@ -2933,6 +2804,8 @@ with align_tab:
                                     "report": page_report,
                                     "final_rows": page_final_rows,
                                     "detailed_rows": page_detailed,
+                                    "review_candidate_rows": page_review_candidates,
+                                    "review_candidate_set_rows": page_review_candidate_sets,
                                     "yolo_rows": page_yolo_rows,
                                     "xml_event_rows": checkpoint_xml_events,
                                     "xml_node_rows": checkpoint_xml_nodes,
@@ -2958,111 +2831,25 @@ with align_tab:
                                     message=f"Completed page: {pair['stem']}",
                                 )
 
-                            def final_sort_key(entry):
-                                page, row_index, row = entry
-                                try:
-                                    time = float(row.get("start_meas", ""))
-                                except (TypeError, ValueError):
-                                    time = float("inf")
-                                return time, page, row_index
-
-                            final_rows = [
-                                entry[2]
-                                for entry in sorted(final_entries, key=final_sort_key)
-                            ]
-                            yolo_rows = [
-                                entry[2]
-                                for entry in sorted(yolo_entries, key=final_sort_key)
-                            ]
-                            final_path = output_dir / "bps_omr_final.csv"
-                            atomic_write_csv(final_path, FINAL_BPS_FIELDS, final_rows)
-                            complete_exports = build_batch_information_outputs(
-                                yolo_rows=yolo_rows,
+                            finalized = finalize_uploaded_batch(
+                                score_id=score_id,
+                                pages=[pair["page_number"] for pair in page_pairs],
+                                page_reports=page_reports,
+                                final_entries=final_entries,
+                                yolo_entries=yolo_entries,
+                                detailed_rows=detailed_rows,
                                 xml_events=xml_event_rows,
                                 xml_nodes=xml_node_rows,
-                                output_dir=output_dir / "complete_exports",
+                                output_dir=output_dir,
+                                overlays=overlays,
+                                review_candidate_rows=review_candidate_rows,
+                                review_candidate_set_rows=review_candidate_set_rows,
                             )
-                            errors = [
-                                error
-                                for page_report in page_reports
-                                for error in page_report["validation_errors"]
-                            ]
-                            errors.extend(complete_exports["validation_errors"])
-                            warnings = [
-                                warning
-                                for page_report in page_reports
-                                for warning in page_report["warnings"]
-                            ]
-                            status_counts = Counter(
-                                row.get("status", "") for row in detailed_rows
-                            )
-                            report = {
-                                "pipeline_version": PIPELINE_VERSION,
-                                "score_id": score_id,
-                                "page_count": len(page_reports),
-                                "pages": [pair["page_number"] for pair in page_pairs],
-                                "alignment_rows": len(final_rows),
-                                "xml_event_rows": complete_exports["xml_event_rows"],
-                                "xml_node_rows": complete_exports["xml_node_rows"],
-                                "timeline_rows": complete_exports["timeline_rows"],
-                                "all_information_rows": complete_exports[
-                                    "all_information_rows"
-                                ],
-                                "xml_span_rows": complete_exports["xml_span_rows"],
-                                "performance_expanded_rows": complete_exports[
-                                    "performance_expanded_rows"
-                                ],
-                                "confirmed_rows": status_counts.get("matched", 0),
-                                "human_corrected_rows": sum(
-                                    row["human_corrected"] == "1" for row in final_rows
-                                ),
-                                "yolo_rows_needing_review": len(final_rows)
-                                - status_counts.get("matched", 0),
-                                "yolo_status_counts": dict(status_counts),
-                                "class_overlay_count": sum(
-                                    page_report.get("class_overlay_count", 0)
-                                    for page_report in page_reports
-                                ),
-                                "clean_reference_pages_used": sum(
-                                    bool(
-                                        page_report.get("clean_reference", {}).get(
-                                            "used"
-                                        )
-                                    )
-                                    for page_report in page_reports
-                                ),
-                                "warnings": list(dict.fromkeys(warnings)),
-                                "validation_errors": errors,
-                                "passed": not errors,
-                                "final_csv_fields": FINAL_BPS_FIELDS,
-                                "empty_value_policy": (
-                                    "uncertain, unavailable, and not-applicable values are blank"
-                                ),
-                            }
-                            report_path = output_dir / "validation_report.json"
-                            atomic_write_json(report_path, report)
-                            zip_path = output_dir / "all_outputs.zip"
-                            with zipfile.ZipFile(
-                                zip_path, "w", compression=zipfile.ZIP_DEFLATED
-                            ) as archive:
-                                archive.write(final_path, arcname=final_path.name)
-                                archive.write(report_path, arcname=report_path.name)
-                                for export_name, export_path in complete_exports[
-                                    "outputs"
-                                ].items():
-                                    archive.write(
-                                        export_path,
-                                        arcname=f"complete_exports/{export_path.name}",
-                                    )
-                                for name, data in overlays.items():
-                                    if isinstance(data, (str, Path)):
-                                        archive.write(
-                                            data, arcname=f"review_images/{name}.png"
-                                        )
-                                    else:
-                                        archive.writestr(
-                                            f"review_images/{name}.png", data
-                                        )
+                            report = finalized["report"]
+                            final_path = finalized["final_path"]
+                            complete_exports = finalized["complete"]
+                            report_path = finalized["report_path"]
+                            zip_path = finalized["zip_path"]
                             validation_json = report_path.read_bytes()
                             write_job_status(
                                 temporary_path,

@@ -8,8 +8,6 @@ import json
 import os
 import time
 import traceback
-import zipfile
-from collections import Counter
 from pathlib import Path
 
 from bps_xml_alignment import load_categories
@@ -25,14 +23,13 @@ from bpsd_aligner.job_store import (
     write_page_checkpoint,
 )
 from bpsd_aligner.pdf_utils import pdf_page_count, render_pdf_page
+from bpsd_aligner.provenance import pipeline_code_signature
 from bpsd_aligner.web_pipeline import (
-    FINAL_BPS_FIELDS,
     PIPELINE_VERSION,
-    build_batch_information_outputs,
+    finalize_uploaded_batch,
     prepare_score_sources,
     run_uploaded_alignment,
 )
-from pipeline_checkpoint import atomic_write_csv, atomic_write_json
 
 
 class JobCancelled(Exception):
@@ -43,15 +40,6 @@ def _read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     with path.open(newline="", encoding="utf-8-sig") as file:
         reader = csv.DictReader(file)
         return list(reader.fieldnames or []), list(reader)
-
-
-def _sort_key(entry: tuple[int, int, dict]) -> tuple[float, int, int]:
-    page, row_index, row = entry
-    try:
-        time = float(row.get("start_meas", ""))
-    except (TypeError, ValueError):
-        time = float("inf")
-    return time, page, row_index
 
 
 def _inside_job(job_dir: Path, raw_path: str | None) -> Path | None:
@@ -73,6 +61,8 @@ def run_background_job(request_path: Path) -> Path:
         raise ValueError("unsupported background job request schema")
     if request.get("pipeline_version") != PIPELINE_VERSION:
         raise ValueError("background job request uses a different pipeline version")
+    if request.get("code_signature") != pipeline_code_signature():
+        raise ValueError("background job request uses different alignment code")
     job_dir = Path(request["job_dir"]).resolve()
     request_path.resolve().relative_to(job_dir)
     fingerprint = str(request["fingerprint"])
@@ -83,6 +73,7 @@ def run_background_job(request_path: Path) -> Path:
     if (
         manifest.get("job_id") != fingerprint
         or manifest.get("pipeline_version") != PIPELINE_VERSION
+        or manifest.get("code_signature") != pipeline_code_signature()
         or manifest.get("owner_id", "") != request.get("owner_id", "")
     ):
         raise ValueError("background job manifest identity does not match its request")
@@ -127,6 +118,7 @@ def run_background_job(request_path: Path) -> Path:
                 job_dir,
                 expected_fingerprint=fingerprint,
                 expected_pipeline_version=PIPELINE_VERSION,
+                expected_code_signature=pipeline_code_signature(),
             )
         if clean_pdf_path is not None:
             page_count = pdf_page_count(clean_pdf_path)
@@ -175,6 +167,8 @@ def run_background_job(request_path: Path) -> Path:
         page_images: dict[str, str] = {}
         xml_events = []
         xml_nodes = []
+        review_candidate_rows = []
+        review_candidate_set_rows = []
         for page_index, page in enumerate(pages):
             if job_cancellation_requested(job_dir):
                 raise JobCancelled("Cancellation was requested between score pages.")
@@ -262,6 +256,14 @@ def run_background_job(request_path: Path) -> Path:
                 row["page_id"] = page_id
                 row["page_number"] = str(page_number)
             detailed_rows.extend(detailed)
+            _fields, page_candidates = _read_csv(
+                outputs["review_note_candidates_csv"]
+            )
+            review_candidate_rows.extend(page_candidates)
+            _fields, page_candidate_sets = _read_csv(
+                outputs["review_candidate_sets_csv"]
+            )
+            review_candidate_set_rows.extend(page_candidate_sets)
             if not xml_events:
                 _fields, xml_events = _read_csv(outputs["xml_events_csv"])
             if not xml_nodes:
@@ -285,71 +287,28 @@ def run_background_job(request_path: Path) -> Path:
                 message=("Resumed" if resumed else "Completed") + f" page: {page_id}",
             )
 
-        final_rows = [entry[2] for entry in sorted(final_entries, key=_sort_key)]
-        yolo_rows = [entry[2] for entry in sorted(yolo_entries, key=_sort_key)]
-        final_path = output_dir / "bps_omr_final.csv"
-        atomic_write_csv(final_path, FINAL_BPS_FIELDS, final_rows)
-        detailed_fields = list(dict.fromkeys(field for row in detailed_rows for field in row))
-        detailed_path = output_dir / "page_alignment_detailed.csv"
-        atomic_write_csv(detailed_path, detailed_fields, detailed_rows)
-        complete = build_batch_information_outputs(
-            yolo_rows=yolo_rows,
+        finalized = finalize_uploaded_batch(
+            score_id=request["score_id"],
+            pages=[int(page["page_number"]) for page in pages],
+            page_reports=page_reports,
+            final_entries=final_entries,
+            yolo_entries=yolo_entries,
+            detailed_rows=detailed_rows,
             xml_events=xml_events,
             xml_nodes=xml_nodes,
-            output_dir=output_dir / "complete_exports",
+            output_dir=output_dir,
+            overlays=overlays,
+            review_candidate_rows=review_candidate_rows,
+            review_candidate_set_rows=review_candidate_set_rows,
         )
-        errors = [
-            error
-            for page_report in page_reports
-            for error in page_report.get("validation_errors", [])
-        ] + list(complete["validation_errors"])
-        warnings = list(
-            dict.fromkeys(
-                warning
-                for page_report in page_reports
-                for warning in page_report.get("warnings", [])
-            )
-        )
-        counts = Counter(row.get("status", "") for row in detailed_rows)
-        report = {
-            "pipeline_version": PIPELINE_VERSION,
-            "score_id": request["score_id"],
-            "page_count": len(pages),
-            "pages": [int(page["page_number"]) for page in pages],
-            "alignment_rows": len(final_rows),
-            "xml_event_rows": complete["xml_event_rows"],
-            "xml_node_rows": complete["xml_node_rows"],
-            "timeline_rows": complete["timeline_rows"],
-            "all_information_rows": complete["all_information_rows"],
-            "xml_span_rows": complete["xml_span_rows"],
-            "performance_expanded_rows": complete["performance_expanded_rows"],
-            "confirmed_rows": counts.get("matched", 0),
-            "human_corrected_rows": 0,
-            "yolo_rows_needing_review": len(final_rows) - counts.get("matched", 0),
-            "yolo_status_counts": dict(counts),
-            "class_overlay_count": sum(
-                page_report.get("class_overlay_count", 0) for page_report in page_reports
-            ),
-            "clean_reference_pages_used": sum(
-                bool(page_report.get("clean_reference", {}).get("used"))
-                for page_report in page_reports
-            ),
-            "warnings": warnings,
-            "validation_errors": errors,
-            "passed": not errors,
-            "final_csv_fields": FINAL_BPS_FIELDS,
-            "empty_value_policy": "uncertain, unavailable, and not-applicable values are blank",
-        }
-        report_path = output_dir / "validation_report.json"
-        atomic_write_json(report_path, report)
-        zip_path = output_dir / "all_outputs.zip"
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.write(final_path, arcname=final_path.name)
-            archive.write(report_path, arcname=report_path.name)
-            for path in complete["outputs"].values():
-                archive.write(path, arcname=f"complete_exports/{Path(path).name}")
-            for name, path in overlays.items():
-                archive.write(path, arcname=f"review_images/{name}.png")
+        report = finalized["report"]
+        final_path = finalized["final_path"]
+        detailed_path = finalized["detailed_path"]
+        review_candidates_path = finalized["review_candidates_path"]
+        review_candidate_sets_path = finalized["review_candidate_sets_path"]
+        complete = finalized["complete"]
+        report_path = finalized["report_path"]
+        zip_path = finalized["zip_path"]
 
         write_job_status(
             job_dir,
@@ -370,6 +329,8 @@ def run_background_job(request_path: Path) -> Path:
             "final_bps_csv": str(final_path),
             **{name: str(path) for name, path in complete["outputs"].items()},
             "detailed_csv": str(detailed_path),
+            "review_note_candidates_csv": str(review_candidates_path),
+            "review_candidate_sets_csv": str(review_candidate_sets_path),
             "validation_json": str(report_path),
             "output_zip": str(zip_path),
             "job_checkpoint_zip": str(checkpoint_path),

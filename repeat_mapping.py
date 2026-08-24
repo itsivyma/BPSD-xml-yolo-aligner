@@ -11,29 +11,28 @@ from collections import defaultdict
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from defusedxml import ElementTree as SafeET
+from bpsd_aligner.musicxml import (
+    child as _shared_child,
+    child_text as _shared_child_text,
+    local_name as _shared_local_name,
+    parse_musicxml,
+)
 
 
 def _local(tag: str) -> str:
-    return tag.rsplit("}", 1)[-1]
+    return _shared_local_name(tag)
 
 
 def _child(element: ET.Element, name: str) -> ET.Element | None:
-    return next((child for child in element if _local(child.tag) == name), None)
+    return _shared_child(element, name)
 
 
 def _text(element: ET.Element, name: str, default: str = "") -> str:
-    child = _child(element, name)
-    return (child.text or default) if child is not None else default
+    return _shared_child_text(element, name, default)
 
 
 def _first_part_measures(path: Path) -> list[ET.Element]:
-    root = SafeET.parse(
-        path,
-        forbid_dtd=False,
-        forbid_entities=True,
-        forbid_external=True,
-    ).getroot()
+    root = parse_musicxml(path)
     part = next(
         element
         for element in root.iter()

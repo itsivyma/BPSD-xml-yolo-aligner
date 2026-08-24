@@ -377,10 +377,18 @@ source score collections can be too large for ordinary browser uploads.
 
 ### Fixed real-page regression suite
 
-`regression/representative_pages.json` defines ten small but varied real pages
-covering fingerings, slurs, ties, tuplets, hairpins, ottava, pedal, wavy-line,
-repeat, cross-system, and cross-page cases. Dataset paths remain outside this
-repository and are resolved relative to `--dataset-root`.
+Two fixed manifests deliberately cover different data profiles:
+
+- `regression/representative_pages.json` is the existing `Xia/` 113-class
+  test/legacy suite and has the committed semantic baseline;
+- `regression/finished_xia_pages.json` is the production `finished/Xia/`
+  162-class suite. Create its baseline only after human review.
+
+Both select ten varied real pages covering fingerings, slurs, ties, tuplets,
+hairpins, ottava, pedal, wavy-line, repeat, cross-system, and cross-page cases.
+The runner validates `notes.json` against the declared class count, preventing
+accidental cross-profile tests. Dataset paths remain outside this repository
+and are resolved relative to `--dataset-root`.
 The baseline includes row-level semantic digests of geometry, class, musical
 time, endpoint note IDs, staff, written measures, and cross-page assignments;
 therefore an endpoint regression cannot pass merely because aggregate row
@@ -397,6 +405,12 @@ bpsd-aligner regression-smoke \
   --resume
 ```
 
+To evaluate actual correctness rather than only stability, export reviewed
+decisions as normalized ground truth and add
+`--ground-truth /path/to/evaluation_ground_truth.csv`. The runner writes
+`ground_truth_accuracy.json`; `regression/ground_truth_template.csv` is the
+portable schema. Private score annotations remain outside Git.
+
 Only after reviewing an intentional result change, update that baseline:
 
 ```bash
@@ -408,7 +422,9 @@ bpsd-aligner regression-smoke \
   --resume --update-baseline
 ```
 
-Each passing page gets its own input-and-code-bound checkpoint. Interrupted,
+Each passing page gets its own input-and-code-bound checkpoint. Website upload
+fingerprints, background requests, job manifests, page checkpoints, and
+portable checkpoint ZIPs use the same code-signature rule. Interrupted,
 missing, stale, failed, or code-outdated pages are rerun; unchanged passing
 pages are resumed. The
 runner prints shared-score and page-stage progress, skips QA image generation,
@@ -645,10 +661,24 @@ bpsd-aligner calibrate-thresholds \
   --output-dir output/threshold-calibration
 ```
 
+Normalized legacy ground truth can enter the same workflow without hand-made
+JSON. The page ID is read from either `page_id` or
+`review_candidate_set_id=page:Yline` in the detailed CSV:
+
+```bash
+bpsd-aligner review-dataset \
+  --predictions /path/to/page_alignment_detailed.csv \
+  --ground-truth /path/to/evaluation_ground_truth.csv \
+  --output-dir output/review-dataset
+```
+
+Rows not explicitly marked `confirmed`, and expected fields left blank as
+unknown, are excluded from threshold labels.
+
 The default guard requires 200 reviewed rows overall, 20 per class family, and
-at least 10 accepted examples at 0.98 observed precision. The report includes
-recall and a 95% Wilson precision lower bound. Insufficient groups produce no
-override. Review `thresholds.recommended.json`, set it with
+at least 10 accepted examples whose 95% Wilson precision lower bound reaches
+0.98. Observed precision alone can no longer mark a threshold ready.
+Insufficient groups produce no override. Review `thresholds.recommended.json`, set it with
 `BPSD_ALIGNER_THRESHOLDS`, and rerun the fixed real-page regression before
 deployment. This calibrates a decision threshold; it does not turn the
 heuristic `confidence` value into a probability.
@@ -667,6 +697,12 @@ integer note IDs, valid JSON `connected_note`, first/last-note consistency,
 stem-only `stem_dir`, binary review/repeat flags, and equality between final
 row count and YOLO box count. Violations make validation fail instead of being
 silently exported.
+
+Detailed alignment CSVs store only a small `review_candidate_set_id`. Unique
+clickable XML notes and set membership are written to
+`review_note_candidates.csv` and `review_candidate_sets.csv`; the website
+hydrates them only in memory. This avoids repeating full-page note JSON in
+every YOLO row while preserving Review behavior.
 In addition, a machine row must have both `alignment_status=matched` and
 `xml_time_confirmed=true`; a high geometry score alone cannot populate final
 time or note fields.

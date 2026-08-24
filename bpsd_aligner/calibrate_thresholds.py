@@ -118,8 +118,8 @@ def calibrate_groups(
             metrics = _metrics(samples, threshold)
             if (
                 metrics["accepted"] >= min_accepted
-                and metrics["precision"] is not None
-                and metrics["precision"] >= target_precision
+                and metrics["precision_wilson_low"] is not None
+                and metrics["precision_wilson_low"] >= target_precision
             ):
                 candidate = threshold
                 candidate_metrics = metrics
@@ -135,8 +135,8 @@ def calibrate_groups(
             )
         if candidate is None:
             reasons.append(
-                f"no threshold reaches precision {target_precision:.3f} with "
-                f"{min_accepted} accepted rows"
+                f"no threshold reaches Wilson precision lower bound "
+                f"{target_precision:.3f} with {min_accepted} accepted rows"
             )
         ready = not reasons
         if ready and scope == "family" and candidate is not None:
@@ -226,13 +226,13 @@ def main() -> None:
         "min_reviewed_overall": args.min_reviewed_overall,
         "min_reviewed_per_group": args.min_reviewed_per_group,
         "min_accepted": args.min_accepted,
-        "ready_for_global_update": eligible >= args.min_reviewed_overall,
+        "ready_for_global_update": bool(recommendations) and not errors,
         "recommended_families": recommendations,
         "validation_errors": errors,
         "passed": not errors,
         "warning": (
-            "Recommendations use observed precision; inspect the Wilson lower bound "
-            "and fixed real-page regression before deployment."
+            "Recommendations require the Wilson precision lower bound to meet the "
+            "target; still inspect the fixed real-page regression before deployment."
         ),
         "outputs": {
             "calibration_csv": str(csv_path),
