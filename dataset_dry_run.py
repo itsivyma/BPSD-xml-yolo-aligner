@@ -12,6 +12,8 @@ from pathlib import Path
 from PIL import Image
 
 from bpsd_aligner import __version__ as PIPELINE_VERSION
+from bpsd_aligner.schema import BPS_OMR_FIELDS
+from bpsd_aligner.csv_io import read_csv_rows
 from bps_xml_alignment import (
     assign_system,
     detect_systems,
@@ -35,11 +37,7 @@ def _as_bool(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes"}
 
 
-OFFICIAL_FIELDS = [
-    "class_id", "x", "y", "w", "h", "class", "musical_time",
-    "start_meas", "end_meas", "start_note", "end_note",
-    "connected_note", "stem_dir",
-]
+OFFICIAL_FIELDS = BPS_OMR_FIELDS
 EXTENDED_FIELDS = [
     "dataset_id", "score_id", "page_id", "scan_page", "yolo_line", "bbox_id",
     "image_path", "yolo_path", "xml_path", "unfolded_xml_path", "sibelius_path",
@@ -62,8 +60,7 @@ FIELDS = OFFICIAL_FIELDS + EXTENDED_FIELDS
 
 
 def _read_csv(path: Path) -> list[dict]:
-    with path.open(newline="", encoding="utf-8-sig") as file:
-        return list(csv.DictReader(file))
+    return read_csv_rows(path)
 
 
 def select_manifest_pages(

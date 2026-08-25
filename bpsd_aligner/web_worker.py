@@ -119,6 +119,7 @@ def run_background_job(request_path: Path) -> Path:
                 expected_fingerprint=fingerprint,
                 expected_pipeline_version=PIPELINE_VERSION,
                 expected_code_signature=pipeline_code_signature(),
+                expected_owner_id=str(request.get("owner_id", "")),
             )
         if clean_pdf_path is not None:
             page_count = pdf_page_count(clean_pdf_path)
@@ -157,6 +158,7 @@ def run_background_job(request_path: Path) -> Path:
             score_id=request["score_id"],
             unfolded_xml_path=unfolded_path,
             progress_callback=shared_progress,
+            include_xml_nodes=False,
         )
 
         page_reports = []
@@ -166,7 +168,6 @@ def run_background_job(request_path: Path) -> Path:
         overlays: dict[str, str] = {}
         page_images: dict[str, str] = {}
         xml_events = []
-        xml_nodes = []
         review_candidate_rows = []
         review_candidate_set_rows = []
         for page_index, page in enumerate(pages):
@@ -266,8 +267,6 @@ def run_background_job(request_path: Path) -> Path:
             review_candidate_set_rows.extend(page_candidate_sets)
             if not xml_events:
                 _fields, xml_events = _read_csv(outputs["xml_events_csv"])
-            if not xml_nodes:
-                _fields, xml_nodes = _read_csv(outputs["xml_nodes_csv"])
             for name, path in outputs.items():
                 if not name.endswith("overlay") or not path.is_file():
                     continue
@@ -295,7 +294,7 @@ def run_background_job(request_path: Path) -> Path:
             yolo_entries=yolo_entries,
             detailed_rows=detailed_rows,
             xml_events=xml_events,
-            xml_nodes=xml_nodes,
+            xml_nodes=[],
             output_dir=output_dir,
             overlays=overlays,
             review_candidate_rows=review_candidate_rows,
@@ -303,12 +302,11 @@ def run_background_job(request_path: Path) -> Path:
         )
         report = finalized["report"]
         final_path = finalized["final_path"]
+        yolo_path = finalized["yolo_path"]
         detailed_path = finalized["detailed_path"]
         review_candidates_path = finalized["review_candidates_path"]
         review_candidate_sets_path = finalized["review_candidate_sets_path"]
-        complete = finalized["complete"]
         report_path = finalized["report_path"]
-        zip_path = finalized["zip_path"]
 
         write_job_status(
             job_dir,
@@ -327,12 +325,11 @@ def run_background_job(request_path: Path) -> Path:
             "owner_id": request.get("owner_id", ""),
             "report": report,
             "final_bps_csv": str(final_path),
-            **{name: str(path) for name, path in complete["outputs"].items()},
+            "yolo_aligned_csv": str(yolo_path),
             "detailed_csv": str(detailed_path),
             "review_note_candidates_csv": str(review_candidates_path),
             "review_candidate_sets_csv": str(review_candidate_sets_path),
             "validation_json": str(report_path),
-            "output_zip": str(zip_path),
             "job_checkpoint_zip": str(checkpoint_path),
             "overlays": overlays,
             "page_images": page_images,
@@ -369,9 +366,11 @@ def run_background_job(request_path: Path) -> Path:
             message="Background worker stopped before outputs were ready.",
             error=f"{type(error).__name__}: {error}",
         )
-        (job_dir / "worker_traceback.log").write_text(
+        traceback_path = job_dir / "worker_traceback.log"
+        traceback_path.write_text(
             traceback.format_exc(), encoding="utf-8"
         )
+        os.chmod(traceback_path, 0o600)
         raise
     finally:
         release_job_lease(lease)

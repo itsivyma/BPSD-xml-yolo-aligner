@@ -27,4 +27,5 @@ def test_job_admin_reports_states_without_full_owner_or_job_ids(tmp_path):
     assert report["jobs"][0]["job_id"] == "a" * 12
     assert report["jobs"][0]["owner_id"] == "b" * 12
     assert report["jobs"][0]["completed_pages"] == 1
+    assert report["storage_bytes"] > 0
     json.dumps(report)

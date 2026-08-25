@@ -14,8 +14,13 @@ from typing import Callable
 from PIL import Image
 
 from bpsd_aligner import __version__ as PIPELINE_VERSION
+from bpsd_aligner.csv_io import read_csv_rows
 from bpsd_aligner.bps_omr_schema import musical_time_for_class
 from bpsd_aligner.span_semantics import endpoint_note_ids, index_chord_members
+from bpsd_aligner.schema import (
+    FINAL_BPS_FIELDS,
+    FINAL_UNCERTAIN_FIELDS,
+)
 from bps_xml_alignment import (
     load_bps_notes,
     load_categories,
@@ -32,19 +37,6 @@ from xml_export import BPS_FIELDS, EVENT_FIELDS, NODE_FIELDS, export_score
 
 MAX_DECODED_IMAGE_PIXELS = 100_000_000
 ProgressCallback = Callable[[int, int, str], None]
-FINAL_BPS_FIELDS = [
-    *OFFICIAL_FIELDS,
-    "human_corrected",
-    "is_repeated_measure",
-]
-FINAL_UNCERTAIN_FIELDS = [
-    "start_meas",
-    "end_meas",
-    "start_note",
-    "end_note",
-    "connected_note",
-    "stem_dir",
-]
 XML_SPAN_FIELDS = [
     "span_id",
     "score_id",
@@ -91,8 +83,15 @@ PERFORMANCE_FIELDS = [
 
 
 def safe_identifier(value: str, fallback: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-._")
-    return cleaned or fallback
+    raw = value.strip()
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-._")
+    if not cleaned:
+        return fallback
+    truncated = cleaned[:80].rstrip("-._") or fallback
+    if truncated != raw:
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+        truncated = f"{truncated[:69].rstrip('-._')}-{digest}"
+    return truncated
 
 
 def _sha256(path: Path) -> str:
@@ -104,8 +103,7 @@ def _sha256(path: Path) -> str:
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="", encoding="utf-8-sig") as file:
-        return list(csv.DictReader(file))
+    return read_csv_rows(path)
 
 
 def _time_sort_key(row: dict) -> tuple:
@@ -800,6 +798,7 @@ def prepare_score_sources(
     unfolded_xml_path: Path | None = None,
     progress_callback: ProgressCallback | None = None,
     resume: bool = True,
+    include_xml_nodes: bool = True,
 ) -> dict:
     """Parse whole-score sources once for every page in a website job."""
 
@@ -821,17 +820,19 @@ def prepare_score_sources(
                 for field in (
                     "repeat_csv",
                     "repeat_json",
-                    "xml_nodes_csv",
                     "xml_events_csv",
                     "xml_spans_csv",
                 )
             ]
+            if include_xml_nodes:
+                saved_paths.append(Path(saved["xml_nodes_csv"]))
         except (OSError, KeyError, TypeError, json.JSONDecodeError):
             saved = None
         if (
             saved is not None
             and saved.get("pipeline_version") == PIPELINE_VERSION
             and saved.get("score_id") == score_id
+            and bool(saved.get("includes_xml_nodes", True)) == include_xml_nodes
             and all(saved.get(key) == value for key, value in source_hashes.items())
             and all(path.is_file() for path in saved_paths)
         ):
@@ -842,9 +843,11 @@ def prepare_score_sources(
                 **saved,
                 "repeat_csv": saved_paths[0],
                 "repeat_json": saved_paths[1],
-                "xml_nodes_csv": saved_paths[2],
-                "xml_events_csv": saved_paths[3],
-                "xml_spans_csv": saved_paths[4],
+                "xml_nodes_csv": (
+                    Path(saved["xml_nodes_csv"]) if include_xml_nodes else ""
+                ),
+                "xml_events_csv": Path(saved["xml_events_csv"]),
+                "xml_spans_csv": Path(saved["xml_spans_csv"]),
             }
     repeat_dir = output_dir / "repeat_mapping"
     repeat_dir.mkdir(parents=True, exist_ok=True)
@@ -854,7 +857,7 @@ def prepare_score_sources(
     repeat_json = repeat_dir / f"{score_id}_repeat_mapping.json"
     write_repeat_mapping(repeat_report, repeat_csv, repeat_json)
 
-    _report_progress(1, 2, "Exporting shared MusicXML nodes and events", progress_callback)
+    _report_progress(1, 2, "Exporting shared MusicXML events", progress_callback)
     nodes, events = export_score(
         {
             "score_id": score_id,
@@ -869,7 +872,8 @@ def prepare_score_sources(
     xml_dir = output_dir / "xml"
     nodes_path = xml_dir / "xml_nodes.csv"
     events_path = xml_dir / "xml_events.csv"
-    atomic_write_csv(nodes_path, NODE_FIELDS, nodes)
+    if include_xml_nodes:
+        atomic_write_csv(nodes_path, NODE_FIELDS, nodes)
     atomic_write_csv(events_path, EVENT_FIELDS, events)
     spans_path = xml_dir / "xml_spans.csv"
     spans = build_xml_spans(events, spans_path)
@@ -897,6 +901,7 @@ def prepare_score_sources(
         ),
         "unfolded_validation": repeat_report.get("unfolded_validation", {}),
         "xml_node_rows": len(nodes),
+        "includes_xml_nodes": include_xml_nodes,
         "xml_event_rows": len(events),
         "xml_span_rows": len(spans),
         "cross_page_xml_span_rows": sum(
@@ -909,7 +914,7 @@ def prepare_score_sources(
         "passed": not errors,
         "repeat_csv": repeat_csv,
         "repeat_json": repeat_json,
-        "xml_nodes_csv": nodes_path,
+        "xml_nodes_csv": nodes_path if include_xml_nodes else "",
         "xml_events_csv": events_path,
         "xml_spans_csv": spans_path,
     }
@@ -954,6 +959,10 @@ def validate_upload_inputs(
             and 0 <= box["y"] <= 1
             and 0 < box["w"] <= 1
             and 0 < box["h"] <= 1
+            and box["x"] - box["w"] / 2 >= 0
+            and box["x"] + box["w"] / 2 <= 1
+            and box["y"] - box["h"] / 2 >= 0
+            and box["y"] + box["h"] / 2 <= 1
         )
     ]
     if invalid_geometry:
@@ -1131,6 +1140,7 @@ def finalize_uploaded_batch(
     overlays: dict,
     review_candidate_rows: list[dict] | None = None,
     review_candidate_set_rows: list[dict] | None = None,
+    build_diagnostics: bool = False,
 ) -> dict:
     """Build identical durable outputs for foreground and background jobs."""
 
@@ -1148,13 +1158,28 @@ def finalize_uploaded_batch(
             start = float("inf")
         return start, page, row_index
 
-    final_rows = [entry[2] for entry in sorted(final_entries, key=entry_sort_key)]
+    machine_sort_keys = {
+        (page, row_index): entry_sort_key((page, row_index, row))
+        for page, row_index, row in yolo_entries
+    }
+
+    def final_entry_sort_key(entry: tuple[int, int, dict]) -> tuple[float, int, int]:
+        own_key = entry_sort_key(entry)
+        if own_key[0] != float("inf"):
+            return own_key
+        return machine_sort_keys.get((entry[0], entry[1]), own_key)
+
+    final_rows = [
+        entry[2] for entry in sorted(final_entries, key=final_entry_sort_key)
+    ]
     yolo_rows = [entry[2] for entry in sorted(yolo_entries, key=entry_sort_key)]
     final_path = output_dir / "bps_omr_final.csv"
     detailed_path = output_dir / "page_alignment_detailed.csv"
     candidates_path = output_dir / "review_note_candidates.csv"
     candidate_sets_path = output_dir / "review_candidate_sets.csv"
+    yolo_path = output_dir / "yolo_aligned.csv"
     atomic_write_csv(final_path, FINAL_BPS_FIELDS, final_rows)
+    atomic_write_csv(yolo_path, FIELDS, yolo_rows)
     disk_detailed_rows = []
     for row in detailed_rows:
         prepared = dict(row)
@@ -1172,11 +1197,25 @@ def finalize_uploaded_batch(
         CANDIDATE_SET_FIELDS,
         review_candidate_set_rows or [],
     )
-    complete = build_batch_information_outputs(
-        yolo_rows=yolo_rows,
-        xml_events=xml_events,
-        xml_nodes=xml_nodes,
-        output_dir=output_dir / "complete_exports",
+    complete = (
+        build_batch_information_outputs(
+            yolo_rows=yolo_rows,
+            xml_events=xml_events,
+            xml_nodes=xml_nodes,
+            output_dir=output_dir / "complete_exports",
+        )
+        if build_diagnostics
+        else {
+            "outputs": {},
+            "validation_errors": [],
+            "passed": True,
+            "xml_event_rows": len(xml_events),
+            "xml_node_rows": len(xml_nodes),
+            "timeline_rows": 0,
+            "all_information_rows": 0,
+            "xml_span_rows": 0,
+            "performance_expanded_rows": 0,
+        }
     )
     errors = [
         error
@@ -1203,6 +1242,7 @@ def finalize_uploaded_batch(
         "all_information_rows": complete["all_information_rows"],
         "xml_span_rows": complete["xml_span_rows"],
         "performance_expanded_rows": complete["performance_expanded_rows"],
+        "diagnostics_materialized": build_diagnostics,
         "confirmed_rows": counts.get("matched", 0),
         "human_corrected_rows": sum(
             row.get("human_corrected") == "1" for row in final_rows
@@ -1224,23 +1264,28 @@ def finalize_uploaded_batch(
     }
     report_path = output_dir / "validation_report.json"
     atomic_write_json(report_path, report)
-    zip_path = output_dir / "all_outputs.zip"
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.write(final_path, arcname=final_path.name)
-        archive.write(report_path, arcname=report_path.name)
-        for path in complete["outputs"].values():
-            archive.write(path, arcname=f"complete_exports/{Path(path).name}")
-        for name, value in overlays.items():
-            if isinstance(value, (str, Path)):
-                archive.write(value, arcname=f"review_images/{name}.png")
-            else:
-                archive.writestr(f"review_images/{name}.png", value)
+    zip_path = None
+    if build_diagnostics:
+        zip_path = output_dir / "diagnostics.zip"
+        with zipfile.ZipFile(
+            zip_path, "w", compression=zipfile.ZIP_DEFLATED
+        ) as archive:
+            archive.write(final_path, arcname=final_path.name)
+            archive.write(report_path, arcname=report_path.name)
+            for path in complete["outputs"].values():
+                archive.write(path, arcname=f"complete_exports/{Path(path).name}")
+            for name, value in overlays.items():
+                if isinstance(value, (str, Path)):
+                    archive.write(value, arcname=f"review_images/{name}.png")
+                else:
+                    archive.writestr(f"review_images/{name}.png", value)
     return {
         "report": report,
         "final_rows": final_rows,
         "yolo_rows": yolo_rows,
         "complete": complete,
         "final_path": final_path,
+        "yolo_path": yolo_path,
         "detailed_path": detailed_path,
         "review_candidates_path": candidates_path,
         "review_candidate_sets_path": candidate_sets_path,
@@ -1365,8 +1410,9 @@ def run_uploaded_alignment(
         or row.get("end_meas") in {"", "NA", None}
     ]
     if missing_time_lines:
-        errors.append(
-            "YOLO rows without start/end time: " + ", ".join(missing_time_lines)
+        warnings.append(
+            "YOLO rows intentionally retain blank start/end time until confirmed: "
+            + ", ".join(str(line) for line in missing_time_lines)
         )
     master_rows = _canonical_master_rows(
         detailed_rows,
@@ -1401,11 +1447,12 @@ def run_uploaded_alignment(
         [row for row in master_rows if row["alignment_status"] != "matched"],
     )
 
-    _report_progress(3, 6, "Exporting every MusicXML node and event", progress_callback)
-    xml_nodes_path = Path(prepared_score["xml_nodes_csv"])
+    _report_progress(3, 6, "Loading shared MusicXML events", progress_callback)
+    xml_nodes_value = prepared_score.get("xml_nodes_csv")
+    xml_nodes_path = Path(xml_nodes_value) if xml_nodes_value else None
     xml_events_path = Path(prepared_score["xml_events_csv"])
     xml_spans_path = Path(prepared_score["xml_spans_csv"])
-    nodes = _read_csv(xml_nodes_path)
+    nodes = _read_csv(xml_nodes_path) if xml_nodes_path is not None else []
     events = _read_csv(xml_events_path)
 
     _report_progress(4, 6, "Building lossless XML + YOLO master", progress_callback)
@@ -1475,12 +1522,13 @@ def run_uploaded_alignment(
         "yolo_aligned_csv": yolo_aligned_path,
         "review_queue_csv": review_queue_path,
         "yolo_master_csv": yolo_master_path,
-        "xml_nodes_csv": xml_nodes_path,
         "xml_events_csv": xml_events_path,
         "xml_spans_csv": xml_spans_path,
         **complete_output_paths,
         **overlay_paths,
     }
+    if xml_nodes_path is not None:
+        outputs["xml_nodes_csv"] = xml_nodes_path
     missing_outputs = [name for name, path in outputs.items() if not path.is_file()]
     if missing_outputs:
         errors.append(f"Missing expected outputs: {missing_outputs}")

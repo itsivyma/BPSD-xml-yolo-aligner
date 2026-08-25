@@ -73,8 +73,8 @@ bpsd-aligner regression-smoke \
   --resume
 ```
 
-上面是既有 `Xia/` 113-class 測試回歸。正式 `finished/Xia/` 162-class
-資料請改用 `regression/finished_xia_pages.json`，不要覆蓋前者；若已有人工
+上面 manifest 是既有 `Xia/` 113-class 測試回歸。正式驗證請改用
+`finished/Xia/` 162-class 與 `regression/finished_xia_pages.json`；若已有人工
 答案，再加 `--ground-truth /path/to/evaluation_ground_truth.csv`。
 
 只有在人工確認結果變更是正確的情況下，才能加
@@ -90,8 +90,8 @@ bpsd-aligner regression-smoke \
 
 ## 6. 三條重要原則
 
-1. Repetition XML 負責印刷版小節與頁面幾何；unfolded XML/BPSD 負責
-   展開反覆後的演奏時間，不能互換。
+1. Repetition XML 負責印刷小節與反覆結構；系統由它推導 performance
+   occurrence。Unfolded XML 只作驗證，BPSD 提供官方時間與 note ID。
 2. Confidence 是 heuristic score，不是真實機率；不要只靠降低 threshold
    來減少 Review。
 3. 重構時不要重跑整個資料集。先跑單元測試，再跑固定十頁回歸，並使用

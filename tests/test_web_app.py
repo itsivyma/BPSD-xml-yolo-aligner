@@ -11,18 +11,13 @@ def test_web_app_loads_without_exceptions():
     result = AppTest.from_file(str(app)).run(timeout=15)
     assert not result.exception
     assert result.title[0].value == "BPSD XML–YOLO Aligner"
-    assert [tab.label for tab in result.tabs] == [
-        "Run alignment",
-        "Inspect CSV",
-        "Advanced combine",
-        "CLI guide",
-    ]
+    assert not result.tabs
     assert any("score_xml_repetitions" in item.value for item in result.info)
     assert any(
         "Clean repetition PDF" in uploader.label
         for uploader in result.file_uploader
     )
-    assert any(
+    assert not any(
         checkbox.label == "Run alignment in a background worker"
         for checkbox in result.checkbox
     )
@@ -206,16 +201,12 @@ def test_completed_job_exposes_human_review_editor_and_apply_button():
     result = app.run(timeout=15)
 
     assert not result.exception
-    assert any(
+    assert not any(
         expander.label == "Human review and corrections"
         for expander in result.expander
     )
-    assert any(
+    assert not any(
         button.label == "Apply reviewed decisions" for button in result.button
-    )
-    assert any(
-        checkbox.label == "Include machine-matched rows for spot checking"
-        for checkbox in result.checkbox
     )
     assert any(
         button.label == "✓ 機器答案正確" for button in result.button
@@ -224,14 +215,16 @@ def test_completed_job_exposes_human_review_editor_and_apply_button():
         button.label == "Apply all saved workspace decisions"
         for button in result.button
     )
+    assert any(
+        item.value == "4. Download final CSV" for item in result.subheader
+    )
     assert any("跨頁符號" in item.value for item in result.info)
     assert any(
         uploader.label == "Resume from review checkpoint"
         for uploader in result.file_uploader
     )
-    assert any(
-        checkbox.label == "Prepare Diagnostics + review images ZIP"
-        for checkbox in result.checkbox
+    assert not any(
+        "Diagnostics" in checkbox.label for checkbox in result.checkbox
     )
     assert not any(
         button.label in {

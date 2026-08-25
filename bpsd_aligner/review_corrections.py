@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
 import json
 from collections import Counter, defaultdict
@@ -360,6 +361,31 @@ def build_review_queue(
         )
     )
     return queue
+
+
+def stratified_matched_sample(
+    detailed_rows: list[dict],
+    *,
+    per_class: int = 3,
+) -> list[dict]:
+    """Select a stable, class-balanced machine-match audit sample."""
+
+    if per_class < 1:
+        raise ValueError("per_class must be at least 1")
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for row in detailed_rows:
+        if _text(row.get("status")) == "matched":
+            grouped[_text(row.get("class")) or "unknown"].append(row)
+    output = []
+    for class_name in sorted(grouped):
+        ranked = sorted(
+            grouped[class_name],
+            key=lambda row: hashlib.sha256(
+                review_row_key(row).encode("utf-8")
+            ).hexdigest(),
+        )
+        output.extend(ranked[:per_class])
+    return output
 
 
 def render_review_focus_images(

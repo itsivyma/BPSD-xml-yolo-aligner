@@ -45,6 +45,7 @@ def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None
     temporary = _temporary_path(path)
     try:
         temporary.write_text(text, encoding=encoding)
+        os.chmod(temporary, 0o600)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -73,6 +74,7 @@ def atomic_write_csv(
             )
             writer.writeheader()
             writer.writerows(rows)
+        os.chmod(temporary, 0o600)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -83,6 +85,7 @@ def atomic_save_png(image: Image.Image, path: Path, *, optimize: bool = True) ->
     temporary = _temporary_path(path)
     try:
         image.save(temporary, format="PNG", optimize=optimize)
+        os.chmod(temporary, 0o600)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)

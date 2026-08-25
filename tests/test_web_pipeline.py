@@ -4,6 +4,7 @@ import shutil
 import zipfile
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from bpsd_aligner.web_pipeline import (
@@ -17,6 +18,7 @@ from bpsd_aligner.web_pipeline import (
     prepare_score_sources,
     run_uploaded_alignment,
     validate_final_bps_rows,
+    finalize_uploaded_batch,
 )
 from bpsd_aligner.job_store import request_job_cancellation, write_job_manifest
 from bpsd_aligner.web_worker import run_background_job
@@ -95,6 +97,80 @@ def _write_uploads(directory: Path) -> dict[str, Path]:
         "bps_notes_path": bps_path,
         "notes_json_path": categories_path,
     }
+
+
+def test_final_batch_uses_machine_time_only_as_hidden_sort_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    complete_dir = tmp_path / "complete"
+    complete_dir.mkdir()
+    dummy = complete_dir / "empty.csv"
+    dummy.write_text("class\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "bpsd_aligner.web_pipeline.build_batch_information_outputs",
+        lambda **_kwargs: {
+            "validation_errors": [],
+            "xml_event_rows": 0,
+            "xml_node_rows": 0,
+            "timeline_rows": 0,
+            "all_information_rows": 0,
+            "xml_span_rows": 0,
+            "performance_expanded_rows": 0,
+            "outputs": {"empty": dummy},
+        },
+    )
+    later = {field: "" for field in FINAL_BPS_FIELDS}
+    earlier = {field: "" for field in FINAL_BPS_FIELDS}
+    later["class"] = "later"
+    earlier["class"] = "earlier"
+
+    result = finalize_uploaded_batch(
+        score_id="score",
+        pages=[1],
+        page_reports=[],
+        final_entries=[(1, 0, later), (1, 1, earlier)],
+        yolo_entries=[
+            (1, 0, {"start_meas": "20"}),
+            (1, 1, {"start_meas": "10"}),
+        ],
+        detailed_rows=[],
+        xml_events=[],
+        xml_nodes=[],
+        output_dir=tmp_path / "output",
+        overlays={},
+        build_diagnostics=True,
+    )
+
+    assert [row["class"] for row in result["final_rows"]] == [
+        "earlier",
+        "later",
+    ]
+    assert all(row["start_meas"] == "" for row in result["final_rows"])
+
+
+def test_safe_identifier_is_collision_resistant_after_sanitizing() -> None:
+    from bpsd_aligner.web_pipeline import safe_identifier
+
+    assert safe_identifier("page-1", "page") == "page-1"
+    assert safe_identifier("page 1", "page") != safe_identifier(
+        "page-1", "page"
+    )
+    assert len(safe_identifier("x" * 200, "page")) <= 80
+
+
+def test_uploaded_alignment_rejects_box_crossing_image_boundary(tmp_path) -> None:
+    inputs = _write_uploads(tmp_path)
+    inputs["yolo_path"].write_text(
+        "18 0.99 0.30 0.04 0.04\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid normalized geometry"):
+        run_uploaded_alignment(
+            **inputs,
+            output_dir=tmp_path / "invalid-output",
+        )
 
 
 def test_uploaded_alignment_preserves_all_sources_and_renders_overlay(tmp_path):
@@ -318,6 +394,31 @@ def test_shared_score_checkpoint_is_bound_to_source_hashes(tmp_path):
 
     assert first["bps_notes_sha256"] != second["bps_notes_sha256"]
     assert second["bps_note_count"] == 2
+
+
+def test_shared_score_can_skip_large_xml_node_dump(tmp_path):
+    inputs = _write_uploads(tmp_path)
+    prepared = prepare_score_sources(
+        xml_path=inputs["xml_path"],
+        bps_notes_path=inputs["bps_notes_path"],
+        output_dir=tmp_path / "shared-without-nodes",
+        score_id="compact",
+        include_xml_nodes=False,
+    )
+
+    assert prepared["xml_nodes_csv"] == ""
+    assert prepared["includes_xml_nodes"] is False
+    assert Path(prepared["xml_events_csv"]).is_file()
+    assert not (tmp_path / "shared-without-nodes/xml/xml_nodes.csv").exists()
+
+    report = run_uploaded_alignment(
+        **inputs,
+        output_dir=tmp_path / "compact-page",
+        prepared_score=prepared,
+        build_complete_exports=False,
+        render_qa_images=False,
+    )
+    assert "xml_nodes_csv" not in report["outputs"]
 
 
 def test_background_worker_completes_and_resumes_page_checkpoint(tmp_path):

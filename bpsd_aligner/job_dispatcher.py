@@ -34,8 +34,54 @@ def queued_requests(root: Path) -> list[Path]:
 
 def _prune_if_configured(root: Path) -> None:
     configured = os.environ.get("BPSD_ALIGNER_JOB_RETENTION_HOURS", "").strip()
+    if not configured and os.environ.get(
+        "BPSD_ALIGNER_DEPLOYMENT_MODE", "local"
+    ).lower() == "production":
+        configured = "168"
     if configured:
         prune_job_store(root=root, retention_hours=float(configured))
+
+
+def acquire_dispatcher_lock(root: Path) -> Path | None:
+    """Atomically elect one local dispatcher process for this job store."""
+
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock = root / ".dispatcher.lock"
+    payload = json.dumps({"pid": os.getpid()})
+    try:
+        descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        try:
+            current = json.loads(lock.read_text(encoding="utf-8"))
+            pid = int(current.get("pid", -1))
+            if pid == os.getpid():
+                return lock
+            os.kill(pid, 0)
+            return None
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            lock.unlink(missing_ok=True)
+            try:
+                descriptor = os.open(
+                    lock,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o600,
+                )
+            except FileExistsError:
+                return None
+    with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+        file.write(payload)
+    return lock
+
+
+def release_dispatcher_lock(lock: Path | None) -> None:
+    if lock is None:
+        return
+    try:
+        payload = json.loads(lock.read_text(encoding="utf-8"))
+        if int(payload.get("pid", -1)) == os.getpid():
+            lock.unlink(missing_ok=True)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        pass
 
 
 def run_dispatcher(
@@ -74,10 +120,17 @@ def main() -> None:
     parser.add_argument("--job-dir", type=Path, default=job_store_root())
     parser.add_argument("--idle-grace-seconds", type=float, default=2.0)
     args = parser.parse_args()
-    run_dispatcher(
-        args.job_dir.expanduser().resolve(),
-        idle_grace_seconds=args.idle_grace_seconds,
-    )
+    root = args.job_dir.expanduser().resolve()
+    lock = acquire_dispatcher_lock(root)
+    if lock is None:
+        return
+    try:
+        run_dispatcher(
+            root,
+            idle_grace_seconds=args.idle_grace_seconds,
+        )
+    finally:
+        release_dispatcher_lock(lock)
 
 
 if __name__ == "__main__":

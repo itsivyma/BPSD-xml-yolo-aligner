@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
-import hmac
 import io
 import json
 import os
-import re
 import subprocess
 import sys
-import tempfile
+import time
 import zipfile
-from contextlib import nullcontext
 from pathlib import Path
 
 import streamlit as st
@@ -23,43 +19,32 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 from bpsd_aligner.web_pipeline import (
     FINAL_BPS_FIELDS,
     PIPELINE_VERSION,
-    build_batch_information_outputs,
-    finalize_uploaded_batch,
-    prepare_score_sources,
-    run_uploaded_alignment,
     safe_identifier,
 )
-from bpsd_aligner.pdf_utils import pdf_page_count, render_pdf_page
 from bpsd_aligner.overlay import render_alignment_overlay
 from bpsd_aligner.provenance import alignment_runtime_identity, pipeline_code_signature
 from bpsd_aligner.job_store import (
-    acquire_job_lease,
-    build_job_checkpoint_archive,
     job_directory,
     load_review_state,
-    load_page_checkpoint,
+    owner_id_for_subject,
     prune_job_store,
     request_job_cancellation,
-    release_job_lease,
-    restore_job_checkpoint_archive,
     validate_upload_batch,
+    validate_storage_capacity,
     validate_page_count,
     write_job_manifest,
     write_job_status,
-    write_page_checkpoint,
     write_review_state,
 )
 from bpsd_aligner.review_corrections import (
-    REVIEW_ACTIONS,
     apply_review_decisions,
-    apply_corrections_to_master_rows,
-    build_editor_rows,
     build_review_checkpoint,
     build_review_queue,
     csv_bytes,
     load_review_checkpoint,
     render_review_endpoint_images,
     render_review_focus_images,
+    stratified_matched_sample,
 )
 from bpsd_aligner.review_dataset import REVIEW_SAMPLE_FIELDS, build_review_samples
 from bpsd_aligner.review_candidates import hydrate_review_candidates
@@ -78,12 +63,14 @@ from bpsd_aligner.web_utils import (
     group_review_overlays,
     pair_page_uploads,
     read_csv_bytes,
-    sanitize_path_columns,
-    summarize_rows,
     upload_destination,
 )
-from combine_yolo_xml import combine_dataset
-from pipeline_checkpoint import atomic_write_csv, atomic_write_json
+from bpsd_aligner.web_security import (
+    configuration_digest,
+    load_user_tokens,
+    verify_access_token,
+)
+from pipeline_checkpoint import atomic_write_json
 
 
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
@@ -92,27 +79,19 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 def _configured_user_tokens() -> dict[str, str]:
     """Load optional per-user tokens for shared multi-user deployments."""
 
-    configured = os.environ.get("BPSD_ALIGNER_USERS_FILE", "").strip()
-    if not configured:
-        return {}
-    payload = json.loads(Path(configured).expanduser().read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or not payload:
-        raise ValueError("BPSD_ALIGNER_USERS_FILE must contain a non-empty JSON object")
-    users = {
-        str(username).strip(): str(token)
-        for username, token in payload.items()
-        if str(username).strip() and str(token)
-    }
-    if len(users) != len(payload):
-        raise ValueError("every configured user requires a non-empty username and token")
-    return users
+    return load_user_tokens(os.environ.get("BPSD_ALIGNER_USERS_FILE", ""))
 
 
 def _job_owner_id() -> str:
     """Return a non-reversible namespace for the authenticated browser owner."""
 
     subject = str(st.session_state.get("bpsd_authenticated_subject", "local"))
-    return hashlib.sha256(subject.encode("utf-8")).hexdigest()
+    return owner_id_for_subject(subject)
+
+
+@st.cache_resource
+def _login_failure_store() -> dict[str, list[float]]:
+    return {}
 
 
 def _require_access_token() -> None:
@@ -124,18 +103,47 @@ def _require_access_token() -> None:
         st.error(f"Invalid multi-user authentication configuration: {error}")
         st.stop()
     expected = os.environ.get("BPSD_ALIGNER_ACCESS_TOKEN", "")
+    deployment_mode = os.environ.get("BPSD_ALIGNER_DEPLOYMENT_MODE", "local").lower()
+    if not users and not expected and deployment_mode == "production":
+        st.error(
+            "Production mode requires BPSD_ALIGNER_USERS_FILE or "
+            "BPSD_ALIGNER_ACCESS_TOKEN."
+        )
+        st.stop()
     authenticated = st.session_state.get("bpsd_authenticated")
     subject = str(st.session_state.get("bpsd_authenticated_subject", ""))
-    if authenticated and (not users or subject in users):
+    configured_for_subject = users.get(subject, "") if users else expected
+    config_digest = configuration_digest(configured_for_subject)
+    if (
+        authenticated
+        and configured_for_subject
+        and st.session_state.get("bpsd_auth_config_digest") == config_digest
+    ):
+        if st.sidebar.button("Sign out", key="bpsd_sign_out"):
+            for key in (
+                "bpsd_authenticated",
+                "bpsd_authenticated_subject",
+                "bpsd_auth_config_digest",
+            ):
+                st.session_state.pop(key, None)
+            st.rerun()
         return
     if not users and not expected:
         st.session_state["bpsd_authenticated_subject"] = "local"
         return
     st.title("BPSD XML–YOLO Aligner")
     st.caption("This deployment requires an access token.")
-    attempts = int(st.session_state.get("bpsd_login_attempts", 0))
-    if attempts >= 5:
-        st.error("Too many failed attempts in this browser session. Reload later.")
+    failure_key = subject or "shared-access-token"
+    now = time.monotonic()
+    failures = _login_failure_store()
+    recent_failures = [
+        timestamp
+        for timestamp in failures.get(failure_key, [])
+        if now - timestamp < 15 * 60
+    ]
+    failures[failure_key] = recent_failures
+    if len(recent_failures) >= 5:
+        st.error("Too many failed attempts. Try again after 15 minutes.")
         st.stop()
     with st.form("bpsd_access_form"):
         username = (
@@ -145,12 +153,16 @@ def _require_access_token() -> None:
         submitted = st.form_submit_button("Open aligner", type="primary")
     if submitted:
         expected_for_user = users.get(username, "") if users else expected
-        if expected_for_user and hmac.compare_digest(supplied, expected_for_user):
+        if verify_access_token(supplied, expected_for_user):
             st.session_state["bpsd_authenticated"] = True
             st.session_state["bpsd_authenticated_subject"] = username
-            st.session_state["bpsd_login_attempts"] = 0
+            st.session_state["bpsd_auth_config_digest"] = configuration_digest(
+                expected_for_user
+            )
+            failures.pop(failure_key, None)
             st.rerun()
-        st.session_state["bpsd_login_attempts"] = attempts + 1
+        recent_failures.append(now)
+        failures[failure_key] = recent_failures
         st.error("Incorrect access token.")
     st.stop()
 
@@ -160,6 +172,10 @@ def _initialize_job_store() -> tuple[str, ...]:
     """Apply an explicitly configured retention policy once per process."""
 
     configured = os.environ.get("BPSD_ALIGNER_JOB_RETENTION_HOURS", "").strip()
+    if not configured and os.environ.get(
+        "BPSD_ALIGNER_DEPLOYMENT_MODE", "local"
+    ).lower() == "production":
+        configured = "168"
     if not configured:
         return ()
     return tuple(prune_job_store(retention_hours=float(configured)))
@@ -183,7 +199,8 @@ def _save_upload(
 ) -> Path:
     """Persist an upload under an optional role-specific collision-safe name."""
 
-    directory.mkdir(parents=True, exist_ok=True)
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(directory, 0o700)
     path = Path(
         upload_destination(
             directory,
@@ -193,6 +210,7 @@ def _save_upload(
         )
     )
     path.write_bytes(uploaded.getvalue())
+    os.chmod(path, 0o600)
     return path
 
 
@@ -388,19 +406,10 @@ def _load_background_result(job_dir: Path, fingerprint: str) -> dict:
     required_paths = [
         "final_bps_csv",
         "yolo_aligned_csv",
-        "xml_events_csv",
-        "xml_nodes_csv",
-        "yolo_xml_timeline_csv",
-        "all_information_csv",
-        "combined_master_csv",
-        "alignment_links_csv",
-        "xml_spans_csv",
-        "performance_expanded_timeline_csv",
         "detailed_csv",
         "review_note_candidates_csv",
         "review_candidate_sets_csv",
         "validation_json",
-        "output_zip",
         "job_checkpoint_zip",
     ]
     missing = [name for name in required_paths if not Path(result[name]).is_file()]
@@ -558,7 +567,6 @@ def _page_checkpoint_artifacts(
         "review_candidate_set_rows": review_candidate_set_rows,
         "yolo_rows": read_csv_bytes(outputs["yolo_aligned_csv"].read_bytes())[1],
         "xml_event_rows": read_csv_bytes(outputs["xml_events_csv"].read_bytes())[1],
-        "xml_node_rows": read_csv_bytes(outputs["xml_nodes_csv"].read_bytes())[1],
         "overlays": overlays,
         "page_image": page_image,
     }
@@ -619,13 +627,6 @@ def _render_large_download(
         )
 
 
-def _summary_cards(summary: dict[str, object]) -> None:
-    first, second, third = st.columns(3)
-    first.metric("Rows", f"{summary['rows']:,}")
-    second.metric("Scores", summary["scores"])
-    third.metric("Statuses", len(summary["statuses"]))
-
-
 def _apply_and_store_review_outputs(
     job: dict, editor_records: list[dict], reviewer: str
 ) -> list[str]:
@@ -679,10 +680,6 @@ def _apply_and_store_review_outputs(
     accuracy_bytes = json.dumps(
         accuracy, ensure_ascii=False, indent=2
     ).encode("utf-8")
-    master_fields, master_rows = read_csv_bytes(_asset_bytes(job["yolo_aligned_csv"]))
-    corrected_master = apply_corrections_to_master_rows(master_rows, corrections)
-    xml_event_fields, xml_events = read_csv_bytes(_asset_bytes(job["xml_events_csv"]))
-    xml_node_fields, xml_nodes = read_csv_bytes(_asset_bytes(job["xml_nodes_csv"]))
     corrected_images = {}
     correction_by_key = {
         f"{entry.get('page_id')}:Y{entry.get('yolo_line')}": entry
@@ -726,36 +723,18 @@ def _apply_and_store_review_outputs(
 
     training_csv = csv_bytes(training_rows, REVIEW_SAMPLE_FIELDS)
 
-    with tempfile.TemporaryDirectory(prefix="bpsd-corrected-") as temporary:
-        target_dir = Path(temporary)
-        atomic_write_csv(target_dir / "yolo_aligned_corrected.csv", master_fields, corrected_master)
-        atomic_write_csv(target_dir / "xml_events.csv", xml_event_fields, xml_events)
-        atomic_write_csv(target_dir / "xml_nodes.csv", xml_node_fields, xml_nodes)
-        rebuilt = build_batch_information_outputs(
-            yolo_rows=corrected_master,
-            xml_events=xml_events,
-            xml_nodes=xml_nodes,
-            output_dir=target_dir / "complete",
-        )
-        if not rebuilt["passed"]:
-            return list(rebuilt["validation_errors"])
-        corrected_csv = csv_bytes(corrected_rows, FINAL_BPS_FIELDS)
-        archive_path = target_dir / "bpsd_alignment_corrected_outputs.zip"
-        with zipfile.ZipFile(
-            archive_path, "w", compression=zipfile.ZIP_DEFLATED
-        ) as archive:
-            archive.writestr("bps_omr_final_corrected.csv", corrected_csv)
-            archive.writestr("human_corrections.json", corrections_bytes)
-            archive.writestr("accuracy_report.json", accuracy_bytes)
-            archive.writestr("review_training_rows.csv", training_csv)
-            for name, path in rebuilt["outputs"].items():
-                archive.write(path, arcname=f"corrected/{path.name}")
-            for name, data in corrected_images.items():
-                archive.writestr(f"corrected_review_images/{name}", data)
-        complete_outputs = {
-            name: path.read_bytes() for name, path in rebuilt["outputs"].items()
-        }
-        corrected_zip = archive_path.read_bytes()
+    corrected_csv = csv_bytes(corrected_rows, FINAL_BPS_FIELDS)
+    corrected_archive = io.BytesIO()
+    with zipfile.ZipFile(
+        corrected_archive, "w", compression=zipfile.ZIP_DEFLATED
+    ) as archive:
+        archive.writestr("bps_omr_final_corrected.csv", corrected_csv)
+        archive.writestr("human_corrections.json", corrections_bytes)
+        archive.writestr("accuracy_report.json", accuracy_bytes)
+        archive.writestr("review_training_rows.csv", training_csv)
+        for name, data in corrected_images.items():
+            archive.writestr(f"corrected_review_images/{name}", data)
+    corrected_zip = corrected_archive.getvalue()
     job["human_review_outputs"] = {
         "corrected_csv": corrected_csv,
         "corrections_json": corrections_bytes,
@@ -763,7 +742,6 @@ def _apply_and_store_review_outputs(
         "training_csv": training_csv,
         "accuracy": accuracy,
         "decisions": len(corrections["entries"]),
-        "complete_outputs": complete_outputs,
         "corrected_images": corrected_images,
         "corrected_zip": corrected_zip,
     }
@@ -1011,8 +989,13 @@ def _render_review_workspace(job: dict) -> None:
         )
     include_matched = queue_mode != "Needs review"
     machine_status = "matched" if queue_mode == "Matched spot check" else None
+    queue_source = (
+        stratified_matched_sample(detailed_rows)
+        if queue_mode == "Matched spot check"
+        else detailed_rows
+    )
     queue = build_review_queue(
-        detailed_rows,
+        queue_source,
         page_id=None if selected_page == "All pages" else selected_page,
         class_name=None if selected_class == "All classes" else selected_class,
         machine_status=machine_status,
@@ -1551,14 +1534,12 @@ def _render_review_workspace(job: dict) -> None:
                 with endpoint_left:
                     start_input = st.text_input(
                         "開始音符",
-                        value=_endpoint_note_input_value(current_start_candidate),
                         key=manual_start_key,
                         placeholder="例如：52, 下, E3, 2",
                     )
                 with endpoint_right:
                     end_input = st.text_input(
                         "結束音符",
-                        value=_endpoint_note_input_value(current_end_candidate),
                         key=manual_end_key,
                         placeholder="例如：53, 上, G4, 1",
                     )
@@ -1875,17 +1856,8 @@ def _render_completed_job(job: dict) -> None:
         "fingerprint",
         "final_bps_csv",
         "yolo_aligned_csv",
-        "xml_events_csv",
-        "xml_nodes_csv",
-        "yolo_xml_timeline_csv",
-        "all_information_csv",
-        "combined_master_csv",
-        "alignment_links_csv",
-        "xml_spans_csv",
-        "performance_expanded_timeline_csv",
         "detailed_rows",
         "validation_json",
-        "output_zip",
         "overlays",
     }
     if not required_job_fields.issubset(job):
@@ -1895,6 +1867,7 @@ def _render_completed_job(job: dict) -> None:
         )
         return
     report = job["report"]
+    st.subheader("3. Review alignment")
     if report["passed"]:
         st.success("Alignment and validation completed.")
     else:
@@ -1915,6 +1888,25 @@ def _render_completed_job(job: dict) -> None:
         )
     for warning in report["warnings"]:
         st.warning(warning)
+
+    st.subheader("4. Download final CSV")
+    corrected_csv = job.get("human_review_outputs", {}).get("corrected_csv")
+    st.download_button(
+        (
+            "Download reviewed final BPS-OMR CSV"
+            if corrected_csv is not None
+            else "Download final BPS-OMR CSV"
+        ),
+        corrected_csv if corrected_csv is not None else _asset_bytes(job["final_bps_csv"]),
+        "bps_omr_final.csv",
+        "text/csv",
+        type="primary",
+        use_container_width=True,
+    )
+    st.caption(
+        "每個 YOLO bounding box 一列；不確定或不存在的值維持空白。"
+        "完成下方人工 review 並套用後，這裡會改為修正版 CSV。"
+    )
 
     _render_review_workspace(job)
     _render_review_outputs(job)
@@ -2045,104 +2037,10 @@ def _render_completed_job(job: dict) -> None:
         else:
             st.success("No machine-generated rows are marked for review.")
 
-    with st.expander("Human review and corrections", expanded=False):
-        st.write(
-            "Confirm keeps the machine values. Correct applies your edited values and "
-            "sets human_corrected=1. Reject clears uncertain semantic fields. "
-            "Leave any unknown value blank."
-        )
-        reviewer = st.text_input(
-            "Reviewer",
-            value="User",
-            key="human_review_reviewer",
-        )
-        include_matched = st.checkbox(
-            "Include machine-matched rows for spot checking",
-            value=False,
-            key="human_review_include_matched",
-        )
-        editor_source = build_editor_rows(
-            job["detailed_rows"], include_matched=include_matched
-        )
-        if editor_source:
-            edited = st.data_editor(
-                editor_source,
-                key=f"human_review_editor_{int(include_matched)}",
-                hide_index=True,
-                use_container_width=True,
-                disabled=["page_id", "yolo_line", "class", "machine_status"],
-                column_config={
-                    "action": st.column_config.SelectboxColumn(
-                        "Action",
-                        options=list(REVIEW_ACTIONS),
-                        required=True,
-                    ),
-                    "page_id": "Page",
-                    "yolo_line": "YOLO line",
-                    "corrected_class": "Corrected class",
-                    "corrected_class_id": "Corrected class ID",
-                    "machine_status": "Machine status",
-                    "start_meas": "Start time",
-                    "end_meas": "End time",
-                    "start_note": "Start note ID",
-                    "end_note": "End note ID",
-                    "connected_note": "Connected note IDs",
-                    "staff": "Staff",
-                    "comment": "Comment",
-                },
-            )
-            if st.button(
-                "Apply reviewed decisions",
-                type="primary",
-                key="apply_human_review_decisions",
-                use_container_width=True,
-            ):
-                edited_records = (
-                    edited.to_dict("records")
-                    if hasattr(edited, "to_dict")
-                    else list(edited)
-                )
-                review_errors = _apply_and_store_review_outputs(
-                    job,
-                    edited_records,
-                    reviewer,
-                )
-                if review_errors:
-                    for error in review_errors:
-                        st.error(error)
-                else:
-                    st.success(
-                        f"Applied {job['human_review_outputs']['decisions']} "
-                        "reviewed decisions."
-                    )
-        else:
-            st.success("No rows are currently available for review.")
-
-    st.subheader("Final BPS-OMR CSV")
-    st.download_button(
-        "Download final CSV",
-        _asset_bytes(job["final_bps_csv"]),
-        "bps_omr_final.csv",
-        "text/csv",
-        use_container_width=True,
-    )
-    st.caption(
-        "每個 YOLO bounding box 一列。欄位依 BPS-OMR annotations："
-        "class_id、x、y、w、h、class、musical_time、start_meas、end_meas、"
-        "start_note、end_note、connected_note、stem_dir；另外只保留 "
-        "human_corrected 與 is_repeated_measure。不確定值留空。"
-    )
-
-    with st.expander("Optional diagnostics and recovery files", expanded=False):
+    with st.expander("Recovery files", expanded=False):
         st.caption(
-            "一般使用只需下載上方 final CSV。這裡的 ZIP 收納 XML、YOLO、"
-            "時間排序、驗證資料與 review images，供除錯或研究追溯。"
-        )
-        _render_large_download(
-            label="Diagnostics + review images ZIP",
-            value=job["output_zip"],
-            file_name="bpsd_alignment_diagnostics.zip",
-            key="final_outputs_zip",
+            "一般使用只需下載上方 final CSV。Checkpoint ZIP 只供同一批輸入"
+            "中斷後續跑與搬移人工 review 狀態；不包含原始上傳檔。"
         )
         if job.get("job_checkpoint_zip"):
             _render_large_download(
@@ -2168,13 +2066,11 @@ _initialize_job_store()
 st.title("BPSD XML–YOLO Aligner")
 st.caption("Upload score pages and export a strict BPS-OMR bounding-box CSV")
 
-align_tab, inspect_tab, combine_tab, guide_tab = st.tabs(
-    ["Run alignment", "Inspect CSV", "Advanced combine", "CLI guide"]
-)
+align_tab = st.container()
 
 with align_tab:
     _render_background_job_status()
-    st.subheader("Upload one or more score pages")
+    st.subheader("1. Upload score files")
     st.write(
         "Upload matching image/TXT pairs. One repetition MusicXML, optional unfolded "
         "MusicXML, BPSD note annotation, and notes.json are shared by every page."
@@ -2265,14 +2161,6 @@ with align_tab:
             "Turn this off to assign consecutive pages starting from First MusicXML page."
         ),
     )
-    run_in_background = st.checkbox(
-        "Run alignment in a background worker",
-        value=True,
-        help=(
-            "Recommended for multi-page scores. The job continues if this browser "
-            "tab closes; return and refresh the saved job status to load outputs."
-        ),
-    )
 
     page_pairs = []
     pairing_error = ""
@@ -2351,7 +2239,7 @@ with align_tab:
 
     required_common = [xml_upload, bps_upload, notes_upload]
     start = st.button(
-        "Align all uploaded pages",
+        "2. Align all uploaded pages",
         type="primary",
         disabled=not page_pairs or bool(pairing_error) or not all(required_common),
         use_container_width=True,
@@ -2374,6 +2262,7 @@ with align_tab:
         try:
             upload_totals = validate_upload_batch(all_uploads)
             validate_page_count(len(page_pairs))
+            validate_storage_capacity(upload_totals["bytes"])
         except ValueError as error:
             upload_batch_valid = False
             st.error(str(error))
@@ -2412,7 +2301,7 @@ with align_tab:
             cached = st.session_state.get("raw_alignment_job")
             if cached and cached.get("fingerprint") == fingerprint:
                 st.info("The inputs match the completed session checkpoint; reusing outputs.")
-            elif run_in_background:
+            else:
                 try:
                     background_dir = _queue_background_job(
                         fingerprint=fingerprint,
@@ -2435,584 +2324,8 @@ with align_tab:
                         "job_dir": str(background_dir),
                     }
                     st.success(
-                        "Background job started. Progress appears at the top of "
-                        "this tab and refreshes automatically every 2 seconds."
+                        "Alignment job started. Progress appears above and refreshes "
+                        "automatically every 2 seconds."
                     )
-            else:
-                with st.status("Running alignment", expanded=True) as status:
-                    progress = st.progress(0, text="Preparing uploads")
-                    persistent_job_dir = job_directory(fingerprint)
-                    with nullcontext(persistent_job_dir) as temporary_path:
-                        lease_path = None
-                        try:
-                            lease_path = acquire_job_lease(temporary_path)
-                        except RuntimeError as error:
-                            status.update(label="Alignment is already busy", state="error")
-                            st.error(str(error))
-                            st.stop()
-                        if resume_job_upload is not None:
-                            try:
-                                restored_files = restore_job_checkpoint_archive(
-                                    resume_job_upload.getvalue(),
-                                    temporary_path,
-                                    expected_fingerprint=fingerprint,
-                                    expected_pipeline_version=PIPELINE_VERSION,
-                                    expected_code_signature=pipeline_code_signature(),
-                                )
-                            except Exception:
-                                release_job_lease(lease_path)
-                                lease_path = None
-                                raise
-                            st.write(
-                                f"Restored {restored_files} checkpoint files for "
-                                f"job {fingerprint[:12]}."
-                            )
-                        try:
-                            input_dir = temporary_path / "inputs"
-                            output_dir = temporary_path / "outputs"
-                            input_dir.mkdir(parents=True, exist_ok=True)
-                            xml_path = _save_upload(
-                                xml_upload,
-                                input_dir,
-                                "score.xml",
-                                stored_name="repetition.xml",
-                            )
-                            bps_path = _save_upload(
-                                bps_upload,
-                                input_dir,
-                                "ann_score_note.csv",
-                                stored_name="bps_notes.csv",
-                            )
-                            notes_path = _save_upload(
-                                notes_upload,
-                                input_dir,
-                                "notes.json",
-                                stored_name="notes.json",
-                            )
-                            unfolded_path = (
-                                _save_upload(
-                                    unfolded_upload,
-                                    input_dir,
-                                    "score_unfolded.xml",
-                                    stored_name="unfolded.xml",
-                                )
-                                if unfolded_upload is not None
-                                else None
-                            )
-                            clean_pdf_path = (
-                                _save_upload(
-                                    clean_pdf_upload,
-                                    input_dir,
-                                    "clean_repetition.pdf",
-                                    stored_name="clean_repetition.pdf",
-                                )
-                                if clean_pdf_upload is not None
-                                else None
-                            )
-                            write_job_manifest(
-                                temporary_path,
-                                fingerprint=fingerprint,
-                                pipeline_version=PIPELINE_VERSION,
-                                code_signature=pipeline_code_signature(),
-                                owner_id=options["owner_id"],
-                                inputs=[
-                                    {
-                                        "name": Path(uploaded.name).name,
-                                        "size": int(uploaded.size),
-                                    }
-                                    for uploaded in all_uploads
-                                    if uploaded is not None
-                                ],
-                            )
-                            completed_page_count = 0
-                            write_job_status(
-                                temporary_path,
-                                state="running",
-                                stage="uploads_saved",
-                                total_pages=len(page_pairs),
-                                message="Uploaded inputs are saved and validated.",
-                            )
-                        except Exception:
-                            release_job_lease(lease_path)
-                            lease_path = None
-                            raise
-                        try:
-                            if clean_pdf_path is not None:
-                                clean_page_count = pdf_page_count(clean_pdf_path)
-                                requested_page = max(
-                                    pair["page_number"] for pair in page_pairs
-                                )
-                                if requested_page > clean_page_count:
-                                    raise ValueError(
-                                        f"Clean repetition PDF has {clean_page_count} "
-                                        f"pages, but page {requested_page} is required. "
-                                        "Check that the PDF and MusicXML are the same "
-                                        "repetition-layout score."
-                                    )
-                                st.write(
-                                    f"Clean repetition PDF: {clean_page_count} pages; "
-                                    "requested pages are in range."
-                                )
-                            write_job_status(
-                                temporary_path,
-                                state="running",
-                                stage="shared_score",
-                                total_pages=len(page_pairs),
-                                message="Preparing whole-score XML and repeat mapping.",
-                            )
-                            st.write("Shared score 0/2: preparing whole-score sources")
-                            prepared_score = prepare_score_sources(
-                                xml_path=xml_path,
-                                bps_notes_path=bps_path,
-                                output_dir=output_dir / "shared_score",
-                                score_id=score_id,
-                                unfolded_xml_path=unfolded_path,
-                                progress_callback=lambda step, total, message: st.write(
-                                    f"Shared score {step}/{total}: {message}"
-                                ),
-                            )
-                            page_reports = []
-                            final_entries = []
-                            detailed_rows = []
-                            review_candidate_rows = []
-                            review_candidate_set_rows = []
-                            yolo_entries = []
-                            xml_event_rows = []
-                            xml_node_rows = []
-                            overlays = {}
-                            page_images = {}
-                            total_steps = len(page_pairs) * 6
-                            page_checkpoints = st.session_state.setdefault(
-                                "raw_alignment_page_checkpoints", {}
-                            )
-                            for page_index, pair in enumerate(page_pairs):
-                                checkpoint_key = (
-                                    f"{fingerprint}:{pair['stem']}:{pair['page_number']}"
-                                )
-                                checkpoint = page_checkpoints.get(checkpoint_key)
-                                if checkpoint is None:
-                                    disk_checkpoint = load_page_checkpoint(
-                                        temporary_path,
-                                        fingerprint=fingerprint,
-                                        pipeline_version=PIPELINE_VERSION,
-                                        page_id=pair["stem"],
-                                        page_number=pair["page_number"],
-                                    )
-                                    if disk_checkpoint is not None:
-                                        stored_image = disk_checkpoint["page_image"]
-                                        checkpoint = _page_checkpoint_artifacts(
-                                            disk_checkpoint["report"],
-                                            page_id=pair["stem"],
-                                            page_number=pair["page_number"],
-                                            page_image=stored_image,
-                                        )
-                                        page_checkpoints[checkpoint_key] = checkpoint
-                                if checkpoint:
-                                    page_reports.append(checkpoint["report"])
-                                    for row_index, row in enumerate(
-                                        checkpoint["final_rows"]
-                                    ):
-                                        final_entries.append(
-                                            (pair["page_number"], row_index, row)
-                                        )
-                                    detailed_rows.extend(checkpoint["detailed_rows"])
-                                    review_candidate_rows.extend(
-                                        checkpoint.get("review_candidate_rows", [])
-                                    )
-                                    review_candidate_set_rows.extend(
-                                        checkpoint.get("review_candidate_set_rows", [])
-                                    )
-                                    for row_index, row in enumerate(
-                                        checkpoint.get("yolo_rows", [])
-                                    ):
-                                        yolo_entries.append(
-                                            (pair["page_number"], row_index, row)
-                                        )
-                                    if not xml_event_rows and checkpoint.get(
-                                        "xml_event_rows"
-                                    ):
-                                        xml_event_rows = checkpoint["xml_event_rows"]
-                                    if not xml_node_rows and checkpoint.get(
-                                        "xml_node_rows"
-                                    ):
-                                        xml_node_rows = checkpoint["xml_node_rows"]
-                                    overlays.update(checkpoint["overlays"])
-                                    if checkpoint.get("page_image"):
-                                        page_images[pair["stem"]] = checkpoint[
-                                            "page_image"
-                                        ]
-                                    completed_steps = (page_index + 1) * 6
-                                    progress.progress(
-                                        completed_steps / total_steps,
-                                        text=(
-                                            f"{completed_steps}/{total_steps} "
-                                            f"{pair['stem']}: resumed page checkpoint"
-                                        ),
-                                    )
-                                    st.write(
-                                        f"{completed_steps}/{total_steps} "
-                                        f"{pair['stem']}: resumed page checkpoint"
-                                    )
-                                    completed_page_count += 1
-                                    write_job_status(
-                                        temporary_path,
-                                        state="running",
-                                        stage="page_alignment",
-                                        completed_pages=completed_page_count,
-                                        total_pages=len(page_pairs),
-                                        message=(
-                                            f"Resumed page checkpoint: {pair['stem']}"
-                                        ),
-                                    )
-                                    continue
-                                page_input_dir = input_dir / "pages" / safe_identifier(
-                                    pair["stem"],
-                                    f"page-{page_index + 1:04d}",
-                                )
-                                page_input_dir.mkdir(parents=True, exist_ok=True)
-                                image_path = _save_upload(
-                                    pair["image"], page_input_dir, "page.png"
-                                )
-                                page_image = str(image_path)
-                                page_images[pair["stem"]] = page_image
-                                yolo_path = _save_upload(
-                                    pair["yolo"], page_input_dir, "page.txt"
-                                )
-                                clean_image_path = None
-                                if clean_pdf_path is not None:
-                                    clean_image_path = render_pdf_page(
-                                        clean_pdf_path,
-                                        pair["page_number"],
-                                        input_dir
-                                        / "clean_pages"
-                                        / f"page-{pair['page_number']:04d}.png",
-                                    )
-                                    st.write(
-                                        f"{pair['stem']}: rendered clean PDF page "
-                                        f"{pair['page_number']} (checkpoint saved)."
-                                    )
-
-                                def update_progress(
-                                    step: int,
-                                    _page_total: int,
-                                    message: str,
-                                    *,
-                                    page_index: int = page_index,
-                                    stem: str = pair["stem"],
-                                ) -> None:
-                                    overall_step = page_index * 6 + step
-                                    progress.progress(
-                                        overall_step / total_steps,
-                                        text=(
-                                            f"{overall_step}/{total_steps} "
-                                            f"{stem}: {message}"
-                                        ),
-                                    )
-                                    st.write(
-                                        f"{overall_step}/{total_steps} {stem}: {message}"
-                                    )
-
-                                page_report = run_uploaded_alignment(
-                                    image_path=image_path,
-                                    yolo_path=yolo_path,
-                                    xml_path=xml_path,
-                                    bps_notes_path=bps_path,
-                                    notes_json_path=notes_path,
-                                    unfolded_xml_path=unfolded_path,
-                                    clean_image_path=clean_image_path,
-                                    output_dir=output_dir / "pages" / pair["stem"],
-                                    page_number=pair["page_number"],
-                                    score_id=score_id,
-                                    infer_fingerings=infer_fingerings,
-                                    progress_callback=update_progress,
-                                    prepared_score=prepared_score,
-                                    build_complete_exports=False,
-                                    system_start_measures=pair.get(
-                                        "system_start_measures"
-                                    ),
-                                    page_end_measure=pair.get("page_end_measure"),
-                                    render_class_overlays=False,
-                                    render_auxiliary_overlays=False,
-                                )
-                                page_reports.append(page_report)
-                                page_outputs = {
-                                    name: Path(path)
-                                    for name, path in page_report["outputs"].items()
-                                }
-                                page_final_rows = []
-                                with page_outputs["final_bps_csv"].open(
-                                    newline="", encoding="utf-8-sig"
-                                ) as file:
-                                    for row_index, row in enumerate(csv.DictReader(file)):
-                                        page_final_rows.append(row)
-                                        final_entries.append(
-                                            (pair["page_number"], row_index, row)
-                                        )
-                                page_detailed = read_csv_bytes(
-                                    page_outputs["detailed_csv"].read_bytes()
-                                )[1]
-                                hydrate_review_candidates(
-                                    page_detailed,
-                                    page_outputs["review_note_candidates_csv"],
-                                    page_outputs["review_candidate_sets_csv"],
-                                )
-                                for row in page_detailed:
-                                    row["page_id"] = pair["stem"]
-                                    row["page_number"] = str(pair["page_number"])
-                                detailed_rows.extend(page_detailed)
-                                page_review_candidates = read_csv_bytes(
-                                    page_outputs["review_note_candidates_csv"].read_bytes()
-                                )[1]
-                                page_review_candidate_sets = read_csv_bytes(
-                                    page_outputs["review_candidate_sets_csv"].read_bytes()
-                                )[1]
-                                review_candidate_rows.extend(page_review_candidates)
-                                review_candidate_set_rows.extend(
-                                    page_review_candidate_sets
-                                )
-                                page_yolo_rows = read_csv_bytes(
-                                    page_outputs["yolo_aligned_csv"].read_bytes()
-                                )[1]
-                                for row_index, row in enumerate(page_yolo_rows):
-                                    yolo_entries.append(
-                                        (pair["page_number"], row_index, row)
-                                    )
-                                checkpoint_xml_events = []
-                                checkpoint_xml_nodes = []
-                                if not xml_event_rows:
-                                    checkpoint_xml_events = read_csv_bytes(
-                                        page_outputs["xml_events_csv"].read_bytes()
-                                    )[1]
-                                    xml_event_rows = checkpoint_xml_events
-                                if not xml_node_rows:
-                                    checkpoint_xml_nodes = read_csv_bytes(
-                                        page_outputs["xml_nodes_csv"].read_bytes()
-                                    )[1]
-                                    xml_node_rows = checkpoint_xml_nodes
-                                page_overlays = {}
-                                for name, path in page_outputs.items():
-                                    if not name.endswith("overlay") or not path.is_file():
-                                        continue
-                                    key = (
-                                        f"class_{pair['stem']}__{name.removeprefix('class_')}"
-                                        if name.startswith("class_")
-                                        else f"{pair['stem']}__{name}"
-                                    )
-                                    page_overlays[key] = str(path)
-                                overlays.update(page_overlays)
-                                page_checkpoints[checkpoint_key] = {
-                                    "report": page_report,
-                                    "final_rows": page_final_rows,
-                                    "detailed_rows": page_detailed,
-                                    "review_candidate_rows": page_review_candidates,
-                                    "review_candidate_set_rows": page_review_candidate_sets,
-                                    "yolo_rows": page_yolo_rows,
-                                    "xml_event_rows": checkpoint_xml_events,
-                                    "xml_node_rows": checkpoint_xml_nodes,
-                                    "overlays": page_overlays,
-                                    "page_image": page_image,
-                                }
-                                write_page_checkpoint(
-                                    temporary_path,
-                                    fingerprint=fingerprint,
-                                    pipeline_version=PIPELINE_VERSION,
-                                    page_id=pair["stem"],
-                                    page_number=pair["page_number"],
-                                    report=page_report,
-                                    page_image=image_path,
-                                )
-                                completed_page_count += 1
-                                write_job_status(
-                                    temporary_path,
-                                    state="running",
-                                    stage="page_alignment",
-                                    completed_pages=completed_page_count,
-                                    total_pages=len(page_pairs),
-                                    message=f"Completed page: {pair['stem']}",
-                                )
-
-                            finalized = finalize_uploaded_batch(
-                                score_id=score_id,
-                                pages=[pair["page_number"] for pair in page_pairs],
-                                page_reports=page_reports,
-                                final_entries=final_entries,
-                                yolo_entries=yolo_entries,
-                                detailed_rows=detailed_rows,
-                                xml_events=xml_event_rows,
-                                xml_nodes=xml_node_rows,
-                                output_dir=output_dir,
-                                overlays=overlays,
-                                review_candidate_rows=review_candidate_rows,
-                                review_candidate_set_rows=review_candidate_set_rows,
-                            )
-                            report = finalized["report"]
-                            final_path = finalized["final_path"]
-                            complete_exports = finalized["complete"]
-                            report_path = finalized["report_path"]
-                            zip_path = finalized["zip_path"]
-                            validation_json = report_path.read_bytes()
-                            write_job_status(
-                                temporary_path,
-                                state="completed",
-                                stage="outputs_ready",
-                                completed_pages=completed_page_count,
-                                total_pages=len(page_pairs),
-                                message=(
-                                    "Alignment outputs passed validation."
-                                    if report["passed"]
-                                    else "Outputs are ready with validation errors."
-                                ),
-                            )
-                            job_checkpoint_path = build_job_checkpoint_archive(
-                                temporary_path,
-                                temporary_path / "alignment_job_checkpoint.zip",
-                            )
-                            st.session_state["raw_alignment_job"] = {
-                                "fingerprint": fingerprint,
-                                "owner_id": options["owner_id"],
-                                "job_dir": str(temporary_path),
-                                "report": report,
-                                "final_bps_csv": str(final_path),
-                                **{
-                                    name: str(path)
-                                    for name, path in complete_exports["outputs"].items()
-                                },
-                                "detailed_rows": detailed_rows,
-                                "validation_json": validation_json,
-                                "output_zip": str(zip_path),
-                                "job_checkpoint_zip": str(job_checkpoint_path),
-                                "overlays": overlays,
-                                "page_images": page_images,
-                                "review_decisions": {},
-                                "bps_note_count": prepared_score.get(
-                                    "bps_note_count"
-                                ),
-                                "bps_note_ids": prepared_score.get("bps_note_ids"),
-                                "class_map": {
-                                    str(item["id"]): str(item["name"])
-                                    for item in json.loads(
-                                        notes_upload.getvalue()
-                                    ).get("categories", [])
-                                },
-                            }
-                        except Exception as error:
-                            write_job_status(
-                                temporary_path,
-                                state="failed",
-                                stage="failed",
-                                completed_pages=completed_page_count,
-                                total_pages=len(page_pairs),
-                                message="Alignment stopped before all outputs were ready.",
-                                error=f"{type(error).__name__}: {error}",
-                            )
-                            status.update(label="Alignment failed", state="error")
-                            st.error(f"{type(error).__name__}: {error}")
-                        else:
-                            status.update(
-                                label=(
-                                    "Alignment completed"
-                                    if report["passed"]
-                                    else "Alignment completed with validation errors"
-                                ),
-                                state="complete" if report["passed"] else "error",
-                            )
-                        finally:
-                            release_job_lease(lease_path)
     if "raw_alignment_job" in st.session_state:
         _render_completed_job(st.session_state["raw_alignment_job"])
-
-with inspect_tab:
-    st.subheader("Inspect an existing combined CSV")
-    uploaded_csv = st.file_uploader("Combined master CSV", type=["csv"], key="inspect_csv")
-    if _valid_upload(uploaded_csv, "CSV"):
-        try:
-            fields, rows = read_csv_bytes(uploaded_csv.getvalue())
-        except (UnicodeDecodeError, csv.Error) as error:
-            st.error(f"Unable to read CSV: {error}")
-        else:
-            summary = summarize_rows(rows)
-            _summary_cards(summary)
-            st.write("Row origins", summary["origins"])
-            st.write("Alignment statuses", summary["statuses"])
-            st.dataframe(rows[:200], use_container_width=True)
-            st.caption(f"Showing the first {min(200, len(rows)):,} rows and {len(fields):,} columns.")
-
-with combine_tab:
-    st.subheader("Combine existing stage outputs")
-    yolo_master = st.file_uploader("YOLO/BPS master CSV", type=["csv"], key="advanced_yolo")
-    xml_events = st.file_uploader("XML events CSV", type=["csv"], key="advanced_xml")
-    remove_paths = st.checkbox("Replace local source paths with filenames", value=True)
-    if st.button(
-        "Combine prepared CSV files",
-        disabled=not (yolo_master and xml_events),
-        key="advanced_combine_button",
-    ):
-        if _valid_upload(yolo_master, "YOLO master") and _valid_upload(
-            xml_events, "XML events"
-        ):
-            with st.status("Combining prepared CSV files", expanded=True) as status:
-                with tempfile.TemporaryDirectory(prefix="bpsd-web-combine-") as temporary:
-                    temporary_path = Path(temporary)
-                    yolo_path = _save_upload(yolo_master, temporary_path, "yolo_master.csv")
-                    xml_path = _save_upload(xml_events, temporary_path, "xml_events.csv")
-                    output_path = temporary_path / "output"
-                    try:
-                        report = combine_dataset(yolo_path, xml_path, output_path)
-                    except Exception as error:
-                        status.update(label="Combination failed", state="error")
-                        st.error(f"{type(error).__name__}: {error}")
-                    else:
-                        combined = (output_path / "combined_master.csv").read_bytes()
-                        if remove_paths:
-                            combined = sanitize_path_columns(combined)
-                        st.session_state["advanced_combined"] = {
-                            "report": report,
-                            "csv": combined,
-                            "links": (output_path / "alignment_links.csv").read_bytes(),
-                            "validation": json.dumps(
-                                report, ensure_ascii=False, indent=2
-                            ).encode("utf-8"),
-                        }
-                        status.update(
-                            label="Combination completed",
-                            state="complete" if report["passed"] else "error",
-                        )
-    if "advanced_combined" in st.session_state:
-        advanced = st.session_state["advanced_combined"]
-        if advanced["report"]["passed"]:
-            st.success("Prepared CSV files combined successfully.")
-        else:
-            st.error("Combination validation found errors.")
-        downloads = st.columns(3)
-        downloads[0].download_button(
-            "Download combined master",
-            advanced["csv"],
-            "combined_master.csv",
-            "text/csv",
-        )
-        downloads[1].download_button(
-            "Download alignment links",
-            advanced["links"],
-            "alignment_links.csv",
-            "text/csv",
-        )
-        downloads[2].download_button(
-            "Download validation JSON",
-            advanced["validation"],
-            "validation_report.json",
-            "application/json",
-        )
-
-with guide_tab:
-    st.subheader("Run the same pipeline in a terminal")
-    st.code(
-        """bpsd-aligner align --help
-bpsd-aligner dry-run --help
-bpsd-aligner xml-export --help
-bpsd-aligner combine --help""",
-        language="bash",
-    )
-    st.info(
-        "The BPSD note annotation CSV is required for official note IDs and timeline fields. "
-        "Repeat order comes from repetition MusicXML; unfolded MusicXML is optional validation."
-    )

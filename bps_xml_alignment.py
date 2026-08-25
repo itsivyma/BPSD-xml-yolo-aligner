@@ -53,7 +53,9 @@ from bpsd_aligner.overlay import (
     write_alignment_overlay,
 )
 from bpsd_aligner.span_semantics import endpoint_note_ids, index_chord_members
+from bpsd_aligner.schema import BPS_OMR_FIELDS
 from bpsd_aligner.thresholds import auto_accept_threshold
+from repeat_mapping import repeat_mapping_is_safe
 
 
 DYNAMIC_CLASS_BY_GLYPH = {
@@ -100,21 +102,7 @@ TARGET_CLASSES = {
     **FINGERING_CLASSES,
 }
 
-OUTPUT_FIELDS = [
-    "class_id",
-    "x",
-    "y",
-    "w",
-    "h",
-    "class",
-    "musical_time",
-    "start_meas",
-    "end_meas",
-    "start_note",
-    "end_note",
-    "connected_note",
-    "stem_dir",
-]
+OUTPUT_FIELDS = BPS_OMR_FIELDS
 
 DETAILED_OUTPUT_FIELDS = [
     *OUTPUT_FIELDS,
@@ -237,6 +225,8 @@ def load_yolo(
             raise ValueError(f"YOLO line {line_number} does not have 5 fields")
         class_id = int(parts[0])
         x, y, width, height = map(float, parts[1:])
+        if not all(math.isfinite(value) for value in (x, y, width, height)):
+            raise ValueError(f"YOLO line {line_number} contains non-finite geometry")
         boxes.append(
             {
                 "txt_line": line_number,
@@ -2038,8 +2028,6 @@ def _repeat_mapping_status(occurrences: list[dict]) -> str:
         for item in occurrences
         if str(item.get("mapping_status", "")).strip()
     }
-    if "structural_unfolded_disagreement" in statuses:
-        return "structural_unfolded_disagreement"
     return "+".join(sorted(statuses))
 
 
@@ -2058,11 +2046,9 @@ def finalize_match_diagnostics(rows: list[dict]) -> None:
                 row["repeat_mapping_status"] = _repeat_mapping_status(
                     [item for item in occurrences if isinstance(item, dict)]
                 )
-        if (
-            row.get("repeat_mapping_status")
-            == "structural_unfolded_disagreement"
-            and row.get("status") in {"matched", "inferred"}
-        ):
+        if not repeat_mapping_is_safe(row.get("repeat_mapping_status")) and row.get(
+            "status"
+        ) in {"matched", "inferred"}:
             row["status"] = "review"
             row["xml_time_confirmed"] = "false"
 
@@ -2141,7 +2127,7 @@ def match_dynamics(
             match_score = 0.75 * geometry_score + 0.25 * count_agreement
             occurrences = event.get("repeat_occurrences", [])
             repeat_mapping_status = _repeat_mapping_status(occurrences)
-            repeat_safe = repeat_mapping_status != "structural_unfolded_disagreement"
+            repeat_safe = repeat_mapping_is_safe(repeat_mapping_status)
             row = _base_output_row(box, key[0])
             row.update(
                 {
@@ -2586,7 +2572,7 @@ def _row_from_anchors(
         else _span_occurrences(start, end)
     )
     repeat_mapping_status = _repeat_mapping_status(occurrences)
-    repeat_safe = repeat_mapping_status != "structural_unfolded_disagreement"
+    repeat_safe = repeat_mapping_is_safe(repeat_mapping_status)
     if status == "matched" and not repeat_safe:
         status = "review"
     row = _base_output_row(box, int(start_event["system"]))

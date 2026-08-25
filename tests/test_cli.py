@@ -12,6 +12,7 @@ def test_help_lists_terminal_and_web_commands(capsys):
     assert "review-dataset" in output
     assert "calibrate-thresholds" in output
     assert "job-admin" in output
+    assert "dispatcher" in output
 
 
 def test_version(capsys):
