@@ -20,7 +20,7 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -34,7 +34,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: docker build -t bpsd-xml-yolo-aligner:ci .
       - run: docker run --rm bpsd-xml-yolo-aligner:ci bpsd-aligner --version
       - run: docker run -d --name bpsd-aligner-ci -p 8501:8501 bpsd-xml-yolo-aligner:ci
