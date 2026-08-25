@@ -1,4 +1,4 @@
-# BPSD XML–YOLO Aligner：15 分鐘上手
+# BPSD XML–YOLO Aligner：
 
 這份文件是新使用者與新維護者的第一個入口。完整研究背景與所有進階
 選項請再閱讀 [README](README.md) 與 [網站操作](docs/WEB_USAGE.md)。
