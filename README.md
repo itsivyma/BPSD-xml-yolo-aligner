@@ -20,6 +20,23 @@ bpsd-aligner web
 Windows PowerShell 使用 `.venv\Scripts\Activate.ps1`。瀏覽器通常會開啟
 `http://localhost:8501`。
 
+### macOS／Python 3.14 安裝修復
+
+一般使用者請採用上面的標準安裝，不需要 editable mode。如果終端已存在
+`bpsd-aligner`，執行時卻出現 `ModuleNotFoundError: bpsd_aligner`，請在專案目錄
+重新安裝並驗證：
+
+```bash
+python -m pip uninstall -y bpsd-xml-yolo-aligner
+python -m pip install .
+python -c "import bpsd_aligner; print(bpsd_aligner.__version__)"
+bpsd-aligner --help
+```
+
+部分 macOS／Python 3.14 環境會略過 editable install 產生且被標記為隱藏的
+`.pth` 檔；標準安裝不依賴該 import hook。若要開發與執行測試，重新安裝時
+使用 `python -m pip install ".[dev]"`。
+
 ## 網站輸入
 
 | 欄位 | 應上傳的版本 | 必要 |

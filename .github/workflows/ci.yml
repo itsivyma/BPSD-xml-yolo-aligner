@@ -29,6 +29,7 @@ jobs:
       - run: python -m pytest
       - run: ruff check --select E9,F63,F7,F82 .
       - run: bpsd-aligner --version
+      - run: cd /tmp && python -c "import bpsd_aligner; print(bpsd_aligner.__version__)"
       - run: cd /tmp && bpsd-aligner --help
 
   docker:
