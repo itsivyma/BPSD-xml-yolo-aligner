@@ -3,11 +3,6 @@
 把掃描樂譜上的 YOLO bounding boxes 對齊 MusicXML 與 BPSD note
 annotations，輸出符合 BPS-OMR 欄位的 CSV，並提供圖片式人工複核。
 
-這不是新的神經網路模型。YOLO 是外部辨識模型；本專案的 alignment
-核心是可重現的 MusicXML 規則、譜面幾何、保守 heuristic 與人工 review。
-
-## 15 分鐘開始使用
-
 ```bash
 git clone https://github.com/itsivyma/BPSD-xml-yolo-aligner.git
 cd BPSD-xml-yolo-aligner
