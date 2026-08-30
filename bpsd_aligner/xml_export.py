@@ -15,7 +15,7 @@ from defusedxml.ElementTree import DefusedXMLParser
 
 from bpsd_aligner import __version__ as PIPELINE_VERSION
 from bpsd_aligner.schema import BPS_OMR_FIELDS
-from pipeline_checkpoint import (
+from bpsd_aligner.pipeline_checkpoint import (
     atomic_write_csv,
     atomic_write_json,
     emit_progress,

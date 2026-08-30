@@ -1,5 +1,5 @@
-from bps_xml_alignment import SystemGeometry as CompatibilitySystemGeometry
-from bps_xml_alignment import assign_system as compatibility_assign_system
+from bpsd_aligner.bps_xml_alignment import SystemGeometry as CompatibilitySystemGeometry
+from bpsd_aligner.bps_xml_alignment import assign_system as compatibility_assign_system
 from bpsd_aligner.geometry import StaffGeometry, SystemGeometry, assign_system
 
 

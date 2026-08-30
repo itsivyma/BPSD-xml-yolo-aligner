@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from pipeline_checkpoint import atomic_write_csv, emit_progress
+from bpsd_aligner.pipeline_checkpoint import atomic_write_csv, emit_progress
 
 
 PIPELINE_VERSION = "0.1.0-audit-crops"

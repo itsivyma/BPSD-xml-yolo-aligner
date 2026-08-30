@@ -70,7 +70,7 @@ from bpsd_aligner.web_security import (
     load_user_tokens,
     verify_access_token,
 )
-from pipeline_checkpoint import atomic_write_json
+from bpsd_aligner.pipeline_checkpoint import atomic_write_json
 
 
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024

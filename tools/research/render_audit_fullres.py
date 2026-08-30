@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from pipeline_checkpoint import (
+from bpsd_aligner.pipeline_checkpoint import (
     atomic_save_png,
     atomic_write_csv,
     atomic_write_json,

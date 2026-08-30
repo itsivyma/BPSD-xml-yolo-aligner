@@ -14,7 +14,7 @@ from PIL import Image
 from bpsd_aligner import __version__ as PIPELINE_VERSION
 from bpsd_aligner.schema import BPS_OMR_FIELDS
 from bpsd_aligner.csv_io import read_csv_rows
-from bps_xml_alignment import (
+from bpsd_aligner.bps_xml_alignment import (
     assign_system,
     detect_systems,
     load_categories,
@@ -22,7 +22,7 @@ from bps_xml_alignment import (
     load_yolo,
     run_alignment,
 )
-from pipeline_checkpoint import (
+from bpsd_aligner.pipeline_checkpoint import (
     atomic_write_csv,
     atomic_write_json,
     emit_progress,

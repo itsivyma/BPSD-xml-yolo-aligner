@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from repeat_mapping import (
+from bpsd_aligner.repeat_mapping import (
     align_fingerprints,
     build_repeat_mapping,
     repeat_mapping_is_safe,

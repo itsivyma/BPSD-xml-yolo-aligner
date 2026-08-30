@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress
+from bpsd_aligner.pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress
 
 
 REVIEW_ACTIONS = (

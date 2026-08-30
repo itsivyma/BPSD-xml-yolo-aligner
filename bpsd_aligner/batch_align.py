@@ -8,7 +8,7 @@ import json
 import re
 from pathlib import Path
 
-from bps_xml_alignment import run_alignment
+from bpsd_aligner.bps_xml_alignment import run_alignment
 
 
 PAGE_PATTERN = re.compile(r"^(?P<score>.+)-(?P<page>\d+)$")

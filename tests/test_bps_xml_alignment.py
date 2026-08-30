@@ -4,7 +4,7 @@ import json
 import pytest
 from PIL import Image, ImageDraw
 
-from bps_xml_alignment import (
+from bpsd_aligner.bps_xml_alignment import (
     OUTPUT_FIELDS,
     StaffGeometry,
     SystemGeometry,

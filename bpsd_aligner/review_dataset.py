@@ -10,7 +10,7 @@ from pathlib import Path
 
 from bpsd_aligner.review_corrections import field_values_equivalent
 from bpsd_aligner.thresholds import auto_accept_threshold, threshold_family
-from pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress
+from bpsd_aligner.pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress
 
 
 CALIBRATION_ACTIONS = {"confirm", "correct", "reject", "scan_only"}

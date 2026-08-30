@@ -3,8 +3,8 @@ from pathlib import Path
 
 from PIL import Image
 
-import alignment_review_sheets
-from alignment_review_sheets import generate_review_sheets
+from bpsd_aligner import alignment_review_sheets
+from bpsd_aligner.alignment_review_sheets import generate_review_sheets
 
 
 def _write_master(path: Path, image_path: Path) -> None:

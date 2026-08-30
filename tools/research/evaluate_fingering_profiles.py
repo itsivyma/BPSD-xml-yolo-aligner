@@ -7,8 +7,8 @@ import csv
 import json
 from pathlib import Path
 
-import bps_xml_alignment as alignment
-from pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress, path_signature, stable_digest
+from bpsd_aligner import bps_xml_alignment as alignment
+from bpsd_aligner.pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress, path_signature, stable_digest
 
 
 PIPELINE_VERSION = "0.5.0-fingering-profile-eval-safe-threshold"

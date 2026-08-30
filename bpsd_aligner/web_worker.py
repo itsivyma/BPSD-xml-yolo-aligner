@@ -10,7 +10,7 @@ import time
 import traceback
 from pathlib import Path
 
-from bps_xml_alignment import load_categories
+from bpsd_aligner.bps_xml_alignment import load_categories
 from bpsd_aligner.job_store import (
     acquire_job_lease,
     build_job_checkpoint_archive,

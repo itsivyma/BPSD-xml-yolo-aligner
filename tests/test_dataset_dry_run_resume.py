@@ -2,7 +2,7 @@ import csv
 import json
 from pathlib import Path
 
-from dataset_dry_run import (
+from bpsd_aligner.dataset_dry_run import (
     FIELDS,
     PIPELINE_VERSION,
     _load_resumable_page,

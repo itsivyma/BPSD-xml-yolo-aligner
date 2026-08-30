@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from bps_xml_alignment import (
+from bpsd_aligner.bps_xml_alignment import (
     attach_bps_note_ids,
     detect_systems,
     load_bps_notes,

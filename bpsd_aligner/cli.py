@@ -11,21 +11,24 @@ from bpsd_aligner import __version__
 
 
 COMMANDS = {
-    "align": ("bps_xml_alignment", "Align one score page"),
-    "batch-align": ("batch_align", "Align a score page range"),
-    "inventory": ("dataset_inventory", "Build dataset manifests"),
-    "dry-run": ("dataset_dry_run", "Run resumable dataset alignment"),
+    "align": ("bpsd_aligner.bps_xml_alignment", "Align one score page"),
+    "batch-align": ("bpsd_aligner.batch_align", "Align a score page range"),
+    "inventory": ("bpsd_aligner.dataset_inventory", "Build dataset manifests"),
+    "dry-run": ("bpsd_aligner.dataset_dry_run", "Run resumable dataset alignment"),
     "regression-smoke": (
         "bpsd_aligner.regression_smoke",
         "Run a resumable real-page regression suite",
     ),
-    "xml-export": ("xml_export", "Export every MusicXML event to CSV"),
-    "combine": ("combine_yolo_xml", "Build a lossless XML + YOLO CSV"),
-    "review-queue": ("build_review_queue", "Build a human-review queue"),
-    "reduce-review": ("reduce_review_queue", "Reduce a review queue"),
-    "review-sheets": ("alignment_review_sheets", "Render review sheets"),
-    "render-overlays": ("render_yolo_overlays", "Render YOLO page overlays"),
-    "apply-review": ("apply_human_audit_feedback", "Apply reviewed decisions"),
+    "xml-export": ("bpsd_aligner.xml_export", "Export every MusicXML event to CSV"),
+    "combine": ("bpsd_aligner.combine_yolo_xml", "Build a lossless XML + YOLO CSV"),
+    "review-queue": ("bpsd_aligner.build_review_queue", "Build a human-review queue"),
+    "reduce-review": ("bpsd_aligner.reduce_review_queue", "Reduce a review queue"),
+    "review-sheets": ("bpsd_aligner.alignment_review_sheets", "Render review sheets"),
+    "render-overlays": ("bpsd_aligner.render_yolo_overlays", "Render YOLO page overlays"),
+    "apply-review": (
+        "bpsd_aligner.apply_human_audit_feedback",
+        "Apply reviewed decisions",
+    ),
     "review-eval": (
         "bpsd_aligner.review_corrections",
         "Normalize human evaluation ground truth",

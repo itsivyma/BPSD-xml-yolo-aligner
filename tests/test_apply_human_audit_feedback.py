@@ -2,7 +2,7 @@ import csv
 import json
 from pathlib import Path
 
-from apply_human_audit_feedback import apply_human_audit_feedback
+from bpsd_aligner.apply_human_audit_feedback import apply_human_audit_feedback
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:

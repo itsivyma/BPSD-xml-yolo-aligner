@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from bpsd_aligner.thresholds import DEFAULT_THRESHOLDS
-from pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress
+from bpsd_aligner.pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress
 
 
 CALIBRATION_FIELDS = (

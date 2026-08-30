@@ -1,4 +1,4 @@
-from bps_xml_alignment import StaffGeometry, SystemGeometry
+from bpsd_aligner.bps_xml_alignment import StaffGeometry, SystemGeometry
 from tools.research.slur_batch_candidates import (
     assign_box_system,
     classify_proposal,

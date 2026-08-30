@@ -9,14 +9,14 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from bpsd_aligner import __version__ as PIPELINE_VERSION
-from pipeline_checkpoint import (
+from bpsd_aligner.pipeline_checkpoint import (
     atomic_write_csv,
     atomic_write_json,
     emit_progress,
     path_signature,
     stable_digest,
 )
-from xml_export import BPS_FIELDS, EVENT_FIELDS
+from bpsd_aligner.xml_export import BPS_FIELDS, EVENT_FIELDS
 
 
 LINK_FIELDS = [

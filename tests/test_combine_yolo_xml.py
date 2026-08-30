@@ -2,12 +2,12 @@ import csv
 import json
 from pathlib import Path
 
-from combine_yolo_xml import (
+from bpsd_aligner.combine_yolo_xml import (
     build_score_combined,
     build_score_links,
     combine_dataset,
 )
-from xml_export import BPS_FIELDS, EVENT_FIELDS
+from bpsd_aligner.xml_export import BPS_FIELDS, EVENT_FIELDS
 
 
 YOLO_EXTRA_FIELDS = [

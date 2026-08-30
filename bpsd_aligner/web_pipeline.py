@@ -21,18 +21,18 @@ from bpsd_aligner.schema import (
     FINAL_BPS_FIELDS,
     FINAL_UNCERTAIN_FIELDS,
 )
-from bps_xml_alignment import (
+from bpsd_aligner.bps_xml_alignment import (
     load_bps_notes,
     load_categories,
     load_yolo,
     parse_musicxml_page,
     run_alignment,
 )
-from combine_yolo_xml import combine_dataset
-from dataset_dry_run import FIELDS, OFFICIAL_FIELDS
-from pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress
-from repeat_mapping import build_repeat_mapping, write_repeat_mapping
-from xml_export import BPS_FIELDS, EVENT_FIELDS, NODE_FIELDS, export_score
+from bpsd_aligner.combine_yolo_xml import combine_dataset
+from bpsd_aligner.dataset_dry_run import FIELDS, OFFICIAL_FIELDS
+from bpsd_aligner.pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress
+from bpsd_aligner.repeat_mapping import build_repeat_mapping, write_repeat_mapping
+from bpsd_aligner.xml_export import BPS_FIELDS, EVENT_FIELDS, NODE_FIELDS, export_score
 
 
 MAX_DECODED_IMAGE_PIXELS = 100_000_000

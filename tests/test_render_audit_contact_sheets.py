@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from pipeline_checkpoint import valid_png
+from bpsd_aligner.pipeline_checkpoint import valid_png
 from tools.research.render_audit_contact_sheets import render_audit_sheets
 
 

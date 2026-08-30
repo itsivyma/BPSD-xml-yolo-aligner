@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from bps_xml_alignment import (
+from bpsd_aligner.bps_xml_alignment import (
     align_barlines_from_reference,
     attach_bps_note_ids,
     detect_systems,

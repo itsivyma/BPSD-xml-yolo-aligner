@@ -23,7 +23,7 @@ from bpsd_aligner.web_pipeline import (
 from bpsd_aligner.job_store import request_job_cancellation, write_job_manifest
 from bpsd_aligner.web_worker import run_background_job
 from bpsd_aligner.provenance import pipeline_code_signature
-from pipeline_checkpoint import atomic_write_json
+from bpsd_aligner.pipeline_checkpoint import atomic_write_json
 
 
 MUSICXML = """<?xml version="1.0" encoding="UTF-8"?>

@@ -12,7 +12,7 @@ from bpsd_aligner import __version__
 from bpsd_aligner.provenance import alignment_runtime_identity
 from bpsd_aligner.review_corrections import evaluate_ground_truth_rows
 from bpsd_aligner.web_pipeline import prepare_score_sources, run_uploaded_alignment
-from pipeline_checkpoint import (
+from bpsd_aligner.pipeline_checkpoint import (
     atomic_write_csv,
     atomic_write_json,
     emit_progress,
