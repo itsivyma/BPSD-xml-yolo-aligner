@@ -36,6 +36,25 @@ class JobCancelled(Exception):
     pass
 
 
+def _compatible_clean_pdf(
+    clean_pdf_path: Path | None,
+    pages: list[dict],
+) -> tuple[Path | None, str]:
+    """Disable an optional clean PDF when its pagination cannot cover the scans."""
+
+    if clean_pdf_path is None:
+        return None, ""
+    page_count = pdf_page_count(clean_pdf_path)
+    requested = max(int(page["page_number"]) for page in pages)
+    if requested <= page_count:
+        return clean_pdf_path, ""
+    return None, (
+        f"Clean repetition PDF has {page_count} pages while scan page {requested} "
+        "is required. Its pagination does not match the scans, so clean-PDF "
+        "geometry was disabled and alignment used the scanned pages instead."
+    )
+
+
 def _read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     with path.open(newline="", encoding="utf-8-sig") as file:
         reader = csv.DictReader(file)
@@ -121,13 +140,10 @@ def run_background_job(request_path: Path) -> Path:
                 expected_code_signature=pipeline_code_signature(),
                 expected_owner_id=str(request.get("owner_id", "")),
             )
-        if clean_pdf_path is not None:
-            page_count = pdf_page_count(clean_pdf_path)
-            requested = max(int(page["page_number"]) for page in pages)
-            if requested > page_count:
-                raise ValueError(
-                    f"Clean repetition PDF has {page_count} pages, but page {requested} is required."
-                )
+        clean_pdf_path, clean_pdf_warning = _compatible_clean_pdf(
+            clean_pdf_path,
+            pages,
+        )
 
         write_job_status(
             job_dir,
@@ -233,6 +249,10 @@ def run_background_job(request_path: Path) -> Path:
                     render_class_overlays=False,
                     render_auxiliary_overlays=False,
                 )
+                if clean_pdf_warning:
+                    report["warnings"] = list(
+                        dict.fromkeys([*report.get("warnings", []), clean_pdf_warning])
+                    )
                 write_page_checkpoint(
                     job_dir,
                     fingerprint=fingerprint,
@@ -243,6 +263,11 @@ def run_background_job(request_path: Path) -> Path:
                     page_image=image_path,
                 )
                 resumed = False
+
+            if clean_pdf_warning:
+                report["warnings"] = list(
+                    dict.fromkeys([*report.get("warnings", []), clean_pdf_warning])
+                )
 
             page_reports.append(report)
             outputs = {name: Path(path) for name, path in report["outputs"].items()}

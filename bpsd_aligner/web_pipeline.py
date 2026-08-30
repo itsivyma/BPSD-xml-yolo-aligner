@@ -22,6 +22,7 @@ from bpsd_aligner.schema import (
     FINAL_UNCERTAIN_FIELDS,
 )
 from bpsd_aligner.bps_xml_alignment import (
+    DETAILED_OUTPUT_FIELDS,
     load_bps_notes,
     load_categories,
     load_yolo,
@@ -30,13 +31,18 @@ from bpsd_aligner.bps_xml_alignment import (
 )
 from bpsd_aligner.combine_yolo_xml import combine_dataset
 from bpsd_aligner.dataset_dry_run import FIELDS, OFFICIAL_FIELDS
+from bpsd_aligner.geometry import assign_system, detect_systems
 from bpsd_aligner.pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress
+from bpsd_aligner.render_yolo_overlays import render_overlay
 from bpsd_aligner.repeat_mapping import build_repeat_mapping, write_repeat_mapping
 from bpsd_aligner.xml_export import BPS_FIELDS, EVENT_FIELDS, NODE_FIELDS, export_score
 
 
 MAX_DECODED_IMAGE_PIXELS = 100_000_000
 ProgressCallback = Callable[[int, int, str], None]
+MISSING_TIME_WARNING_PREFIX = (
+    "YOLO rows intentionally retain blank start/end time until confirmed"
+)
 XML_SPAN_FIELDS = [
     "span_id",
     "score_id",
@@ -134,6 +140,21 @@ def _sort_csv_by_musical_time(path: Path) -> int:
         rows = sorted(reader, key=_time_sort_key)
     atomic_write_csv(path, fields, rows)
     return len(rows)
+
+
+def _missing_time_warning(lines: list[object]) -> str:
+    preview = ", ".join(str(line) for line in lines[:20])
+    remainder = len(lines) - 20
+    suffix = f", … (+{remainder} more)" if remainder > 0 else ""
+    return f"{MISSING_TIME_WARNING_PREFIX}: {len(lines)} rows (lines {preview}{suffix})"
+
+
+def _compact_warning(warning: str) -> str:
+    prefix = f"{MISSING_TIME_WARNING_PREFIX}: "
+    if not warning.startswith(prefix) or " rows (lines " in warning:
+        return warning
+    lines = [value.strip() for value in warning[len(prefix) :].split(",")]
+    return _missing_time_warning(lines)
 
 
 def build_final_bps_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -939,6 +960,7 @@ def validate_upload_inputs(
     validate_repeat_mapping: bool = True,
     system_start_measures: list[int] | None = None,
     page_end_measure: int | None = None,
+    allow_missing_xml_page: bool = False,
 ) -> dict[str, int]:
     with Image.open(image_path) as image:
         if image.width * image.height > MAX_DECODED_IMAGE_PIXELS:
@@ -979,18 +1001,126 @@ def validate_upload_inputs(
     # expensive image alignment begins.
     if validate_repeat_mapping:
         build_repeat_mapping(xml_path, xml_path)
-    xml_page = parse_musicxml_page(
-        xml_path,
-        page_number=page_number,
-        system_start_measures=system_start_measures,
-        page_end_measure=page_end_measure,
-    )
-    if not xml_page["measures"]:
+    try:
+        xml_page = parse_musicxml_page(
+            xml_path,
+            page_number=page_number,
+            system_start_measures=system_start_measures,
+            page_end_measure=page_end_measure,
+        )
+    except ValueError as error:
+        if not (
+            allow_missing_xml_page
+            and str(error) == f"MusicXML page {page_number} does not exist"
+        ):
+            raise
+        xml_page = None
+    if xml_page is not None and not xml_page["measures"]:
         raise ValueError(f"MusicXML page {page_number} contains no measures")
     return {
         "yolo_boxes": len(boxes),
         "classes": len(categories),
         "bps_notes": len(bps_notes),
+        "xml_page_available": int(xml_page is not None),
+    }
+
+
+def _outside_scope_alignment_report(
+    *,
+    image_path: Path,
+    yolo_path: Path,
+    notes_json_path: Path,
+    output_dir: Path,
+    render_qa_images: bool,
+) -> dict:
+    """Preserve every YOLO box when the scan lies outside MusicXML page scope."""
+
+    from bpsd_aligner.review_candidates import (
+        CANDIDATE_FIELDS,
+        CANDIDATE_SET_FIELDS,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    categories = load_categories(notes_json_path)
+    boxes = load_yolo(yolo_path, categories=categories)
+    with Image.open(image_path) as opened:
+        image = opened.convert("RGB")
+    try:
+        systems = detect_systems(image)
+    except ValueError:
+        systems = []
+    detailed_rows = []
+    for box in boxes:
+        row = {field: "" for field in DETAILED_OUTPUT_FIELDS}
+        musical_time = musical_time_for_class(box["class"])
+        system = assign_system(box, systems, image.height) if systems else ""
+        row.update(
+            {
+                "class_id": str(box["class_id"]),
+                "x": f"{box['x']:.6f}",
+                "y": f"{box['y']:.6f}",
+                "w": f"{box['w']:.6f}",
+                "h": f"{box['h']:.6f}",
+                "class": box["class"],
+                "musical_time": "" if musical_time is None else str(musical_time),
+                "human_corrected": "0",
+                "is_repeated_measure": "0",
+                "txt_line": str(box["txt_line"]),
+                "system": str(system),
+                "match_source": "outside_musicxml_scope",
+                "xml_time_confirmed": "false",
+                "status": "review",
+                "movement_scope_status": "outside_bpsd_scope",
+                "page_mapping_status": "xml_missing",
+                "mapping_source": "scan_page_outside_musicxml_layout",
+                "error_code": "outside_musicxml_scope",
+                "error_message": "No corresponding MusicXML layout page; semantic values are blank.",
+            }
+        )
+        detailed_rows.append(row)
+    image.close()
+
+    stem = safe_identifier(image_path.stem, "scan-page")
+    detailed_path = output_dir / f"{stem}_alignment_detailed.csv"
+    official_path = output_dir / f"{stem}_bps_omr_all_symbols.csv"
+    candidates_path = output_dir / f"{stem}_review_note_candidates.csv"
+    candidate_sets_path = output_dir / f"{stem}_review_candidate_sets.csv"
+    extra_fields = [
+        "movement_scope_status",
+        "page_mapping_status",
+        "mapping_source",
+        "error_code",
+        "error_message",
+    ]
+    atomic_write_csv(
+        detailed_path,
+        [*DETAILED_OUTPUT_FIELDS, *extra_fields],
+        detailed_rows,
+    )
+    atomic_write_csv(official_path, OFFICIAL_FIELDS, detailed_rows)
+    atomic_write_csv(candidates_path, CANDIDATE_FIELDS, [])
+    atomic_write_csv(candidate_sets_path, CANDIDATE_SET_FIELDS, [])
+    outputs = {
+        "csv": official_path,
+        "detailed_csv": detailed_path,
+        "review_note_candidates_csv": candidates_path,
+        "review_candidate_sets_csv": candidate_sets_path,
+    }
+    if render_qa_images:
+        overlay_path = output_dir / "qa" / f"{stem}_outside_xml_scope.png"
+        render_overlay(
+            image_path,
+            yolo_path,
+            categories,
+            overlay_path,
+            show_class=True,
+        )
+        outputs["review_overlay"] = overlay_path
+    return {
+        "outputs": {name: str(path) for name, path in outputs.items()},
+        "clean_reference": {"requested": False, "used": False},
+        "class_overlay_count": 0,
+        "class_overlay_available_count": 0,
     }
 
 
@@ -1048,8 +1178,11 @@ def _canonical_master_rows(
                 "image_sha256": image_hash,
                 "yolo_sha256": yolo_hash,
                 "scan_system_index": system,
-                "xml_page": str(page_number),
-                "xml_systems_json": json.dumps([int(system)]) if str(system).isdigit() else "[]",
+                "xml_page": detailed.get("xml_page", str(page_number)),
+                "xml_systems_json": detailed.get(
+                    "xml_systems_json",
+                    json.dumps([int(system)]) if str(system).isdigit() else "[]",
+                ),
                 "written_measure_start": detailed.get(
                     "start_xml_measure", detailed.get("xml_measure", "")
                 ),
@@ -1081,9 +1214,13 @@ def _canonical_master_rows(
                     "repeat_mapping_status",
                     first_occurrence.get("mapping_status", ""),
                 ),
-                "movement_scope_status": "in_bpsd_scope",
-                "page_mapping_status": "direct",
-                "mapping_source": "web_uploaded_page_number",
+                "movement_scope_status": detailed.get(
+                    "movement_scope_status", "in_bpsd_scope"
+                ),
+                "page_mapping_status": detailed.get("page_mapping_status", "direct"),
+                "mapping_source": detailed.get(
+                    "mapping_source", "web_uploaded_page_number"
+                ),
                 "match_source": detailed.get("match_source", ""),
                 "confidence": detailed.get("confidence", ""),
                 "match_score": detailed.get(
@@ -1112,8 +1249,8 @@ def _canonical_master_rows(
                 "end_target_x_px": detailed.get("end_target_x_px", ""),
                 "end_target_y_px": detailed.get("end_target_y_px", ""),
                 "pipeline_version": PIPELINE_VERSION,
-                "error_code": "",
-                "error_message": "",
+                "error_code": detailed.get("error_code", ""),
+                "error_message": detailed.get("error_message", ""),
             }
         )
         rows.append({field: row.get(field, "") for field in FIELDS})
@@ -1224,7 +1361,7 @@ def finalize_uploaded_batch(
     ] + list(complete["validation_errors"])
     warnings = list(
         dict.fromkeys(
-            warning
+            _compact_warning(warning)
             for page_report in page_reports
             for warning in page_report.get("warnings", [])
         )
@@ -1335,6 +1472,7 @@ def run_uploaded_alignment(
         validate_repeat_mapping=prepared_score is None,
         system_start_measures=system_start_measures,
         page_end_measure=page_end_measure,
+        allow_missing_xml_page=True,
     )
     if clean_image_path is not None:
         try:
@@ -1363,25 +1501,39 @@ def run_uploaded_alignment(
 
     _report_progress(2, 6, "Aligning YOLO boxes to score information", progress_callback)
     alignment_dir = output_dir / "alignment"
-    alignment_report = run_alignment(
-        image_path=image_path,
-        yolo_path=yolo_path,
-        xml_path=xml_path,
-        bps_note_path=bps_notes_path,
-        output_dir=alignment_dir,
-        page_number=page_number,
-        infer_fingerings=infer_fingerings,
-        notes_json_path=notes_json_path,
-        include_all_symbols=True,
-        repeat_mapping_path=repeat_csv,
-        clean_image_path=clean_image_path,
-        system_start_measures=system_start_measures,
-        page_end_measure=page_end_measure,
-        whole_score_spans=_read_csv(Path(prepared_score["xml_spans_csv"])),
-        render_qa_images=render_qa_images,
-        render_class_overlays=render_class_overlays,
-        render_auxiliary_overlays=render_auxiliary_overlays,
-    )
+    if input_counts["xml_page_available"]:
+        alignment_report = run_alignment(
+            image_path=image_path,
+            yolo_path=yolo_path,
+            xml_path=xml_path,
+            bps_note_path=bps_notes_path,
+            output_dir=alignment_dir,
+            page_number=page_number,
+            infer_fingerings=infer_fingerings,
+            notes_json_path=notes_json_path,
+            include_all_symbols=True,
+            repeat_mapping_path=repeat_csv,
+            clean_image_path=clean_image_path,
+            system_start_measures=system_start_measures,
+            page_end_measure=page_end_measure,
+            whole_score_spans=_read_csv(Path(prepared_score["xml_spans_csv"])),
+            render_qa_images=render_qa_images,
+            render_class_overlays=render_class_overlays,
+            render_auxiliary_overlays=render_auxiliary_overlays,
+        )
+    else:
+        alignment_report = _outside_scope_alignment_report(
+            image_path=image_path,
+            yolo_path=yolo_path,
+            notes_json_path=notes_json_path,
+            output_dir=alignment_dir,
+            render_qa_images=render_qa_images,
+        )
+        warnings.append(
+            f"Scan page {page_number} has no corresponding MusicXML layout page. "
+            "Every YOLO box was preserved, but uncertain semantic and timing "
+            "values remain blank for human review."
+        )
     clean_reference = alignment_report.get("clean_reference", {})
     if clean_image_path is not None and not clean_reference.get("used"):
         warnings.append(
@@ -1410,10 +1562,7 @@ def run_uploaded_alignment(
         or row.get("end_meas") in {"", "NA", None}
     ]
     if missing_time_lines:
-        warnings.append(
-            "YOLO rows intentionally retain blank start/end time until confirmed: "
-            + ", ".join(str(line) for line in missing_time_lines)
-        )
+        warnings.append(_missing_time_warning(missing_time_lines))
     master_rows = _canonical_master_rows(
         detailed_rows,
         score_id=score_id,

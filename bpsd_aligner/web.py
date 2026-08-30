@@ -51,12 +51,13 @@ from bpsd_aligner.review_candidates import hydrate_review_candidates
 from bpsd_aligner.review_workspace import (
     candidate_note_id as _candidate_note_id,
     candidate_printed_measure as _candidate_printed_measure,
-    endpoint_note_input_value as _endpoint_note_input_value,
+    endpoint_note_input_values as _endpoint_note_input_values,
     fill_missing_note_orders as _fill_missing_note_orders,
     merge_page_note_candidates as _merge_page_note_candidates,
-    resolve_endpoint_note_input as _resolve_endpoint_note_input,
+    resolve_endpoint_note_inputs as _resolve_endpoint_note_inputs,
     review_note_label as _review_note_label,
     snap_click_to_note_candidate as _snap_click_to_note_candidate,
+    toggle_endpoint_note_input as _toggle_endpoint_note_input,
 )
 from bpsd_aligner.web_utils import (
     apply_page_mapping_edits,
@@ -146,9 +147,7 @@ def _require_access_token() -> None:
         st.error("Too many failed attempts. Try again after 15 minutes.")
         st.stop()
     with st.form("bpsd_access_form"):
-        username = (
-            st.text_input("Username") if users else "shared-access-token"
-        )
+        username = st.text_input("Username") if users else "shared-access-token"
         supplied = st.text_input("Access token", type="password")
         submitted = st.form_submit_button("Open aligner", type="primary")
     if submitted:
@@ -172,9 +171,11 @@ def _initialize_job_store() -> tuple[str, ...]:
     """Apply an explicitly configured retention policy once per process."""
 
     configured = os.environ.get("BPSD_ALIGNER_JOB_RETENTION_HOURS", "").strip()
-    if not configured and os.environ.get(
-        "BPSD_ALIGNER_DEPLOYMENT_MODE", "local"
-    ).lower() == "production":
+    if (
+        not configured
+        and os.environ.get("BPSD_ALIGNER_DEPLOYMENT_MODE", "local").lower()
+        == "production"
+    ):
         configured = "168"
     if not configured:
         return ()
@@ -250,7 +251,10 @@ def _queue_background_job(
         status = json.loads(status_path.read_text(encoding="utf-8"))
         if status.get("state") in {"queued", "running"}:
             return job_dir
-        if status.get("state") == "completed" and (job_dir / "job_result.json").is_file():
+        if (
+            status.get("state") == "completed"
+            and (job_dir / "job_result.json").is_file()
+        ):
             return job_dir
     (job_dir / "cancel_requested.json").unlink(missing_ok=True)
     input_dir = job_dir / "inputs"
@@ -296,8 +300,10 @@ def _queue_background_job(
     )
     page_requests = []
     for page_index, pair in enumerate(page_pairs, start=1):
-        page_dir = input_dir / "pages" / safe_identifier(
-            pair["stem"], f"page-{page_index:04d}"
+        page_dir = (
+            input_dir
+            / "pages"
+            / safe_identifier(pair["stem"], f"page-{page_index:04d}")
         )
         page_dir.mkdir(parents=True, exist_ok=True)
         image_path = _save_upload(pair["image"], page_dir, "page.png")
@@ -321,7 +327,11 @@ def _queue_background_job(
         inputs=[
             {"name": Path(uploaded.name).name, "size": int(uploaded.size)}
             for uploaded in [
-                *(item for pair in page_pairs for item in (pair["image"], pair["yolo"])),
+                *(
+                    item
+                    for pair in page_pairs
+                    for item in (pair["image"], pair["yolo"])
+                ),
                 xml_upload,
                 bps_upload,
                 notes_upload,
@@ -415,9 +425,7 @@ def _load_background_result(job_dir: Path, fingerprint: str) -> dict:
     missing = [name for name in required_paths if not Path(result[name]).is_file()]
     if missing:
         raise ValueError("background result is incomplete: " + ", ".join(missing))
-    _fields, detailed_rows = read_csv_bytes(
-        Path(result["detailed_csv"]).read_bytes()
-    )
+    _fields, detailed_rows = read_csv_bytes(Path(result["detailed_csv"]).read_bytes())
     hydrate_review_candidates(
         detailed_rows,
         Path(result["review_note_candidates_csv"]),
@@ -457,7 +465,9 @@ def _render_background_job_status() -> None:
         st.caption(status["message"])
     controls = st.columns(2)
     if status.get("state") in {"queued", "running"}:
-        st.caption("Progress refreshes automatically every 2 seconds. You may close this tab.")
+        st.caption(
+            "Progress refreshes automatically every 2 seconds. You may close this tab."
+        )
     if controls[0].button("Refresh background status", use_container_width=True):
         st.rerun()
     if status.get("state") == "completed":
@@ -475,9 +485,8 @@ def _render_background_job_status() -> None:
                     "durable result. This panel will retry automatically."
                 )
                 return
-            should_load = (
-                previous_failure.get("fingerprint") != fingerprint
-                or bool(previous_failure.get("transient"))
+            should_load = previous_failure.get("fingerprint") != fingerprint or bool(
+                previous_failure.get("transient")
             )
             if not should_load:
                 st.error(
@@ -514,9 +523,7 @@ def _render_background_job_status() -> None:
                     st.session_state.pop(failure_key, None)
                     st.rerun()
     elif status.get("state") in {"queued", "running"}:
-        if controls[1].button(
-            "Request cancellation", use_container_width=True
-        ):
+        if controls[1].button("Request cancellation", use_container_width=True):
             request_job_cancellation(job_dir)
             st.warning("Cancellation requested. The worker will stop between pages.")
     elif status.get("state") == "failed":
@@ -674,20 +681,17 @@ def _apply_and_store_review_outputs(
     )
     if training_errors:
         return training_errors
-    corrections_bytes = json.dumps(
-        corrections, ensure_ascii=False, indent=2
-    ).encode("utf-8")
-    accuracy_bytes = json.dumps(
-        accuracy, ensure_ascii=False, indent=2
-    ).encode("utf-8")
+    corrections_bytes = json.dumps(corrections, ensure_ascii=False, indent=2).encode(
+        "utf-8"
+    )
+    accuracy_bytes = json.dumps(accuracy, ensure_ascii=False, indent=2).encode("utf-8")
     corrected_images = {}
     correction_by_key = {
         f"{entry.get('page_id')}:Y{entry.get('yolo_line')}": entry
         for entry in corrections["entries"]
     }
     training_by_key = {
-        f"{row.get('page_id')}:Y{row.get('yolo_line')}": row
-        for row in training_rows
+        f"{row.get('page_id')}:Y{row.get('yolo_line')}": row for row in training_rows
     }
     for source in job["detailed_rows"]:
         key = f"{source.get('page_id')}:Y{source.get('txt_line')}"
@@ -697,12 +701,17 @@ def _apply_and_store_review_outputs(
             continue
         image_row = dict(source)
         image_row.update(correction.get("corrected", {}))
-        image_row["review_target_x_px"] = correction.get(
-            "review_target_x_px", ""
-        )
-        image_row["review_target_y_px"] = correction.get(
-            "review_target_y_px", ""
-        )
+        image_row["review_target_x_px"] = correction.get("review_target_x_px", "")
+        image_row["review_target_y_px"] = correction.get("review_target_y_px", "")
+        for field in (
+            "review_start_target_x_px",
+            "review_start_target_y_px",
+            "review_end_target_x_px",
+            "review_end_target_y_px",
+            "review_start_targets_json",
+            "review_end_targets_json",
+        ):
+            image_row[field] = correction.get(field, "")
         try:
             full, crop = render_review_focus_images(image_data, image_row)
         except ValueError:
@@ -714,12 +723,8 @@ def _apply_and_store_review_outputs(
         corrected_images[crop_name] = crop
         training_row = training_by_key.get(key)
         if training_row is not None:
-            training_row["review_full_image"] = (
-                f"corrected_review_images/{full_name}"
-            )
-            training_row["review_crop_image"] = (
-                f"corrected_review_images/{crop_name}"
-            )
+            training_row["review_full_image"] = f"corrected_review_images/{full_name}"
+            training_row["review_crop_image"] = f"corrected_review_images/{crop_name}"
 
     training_csv = csv_bytes(training_rows, REVIEW_SAMPLE_FIELDS)
 
@@ -755,9 +760,8 @@ def _workspace_source_image(job: dict, row: dict) -> bytes | None:
     if page_id in page_images:
         return _asset_bytes(page_images[page_id])
     overlays = job.get("overlays", {})
-    selected = (
-        overlays.get(f"{page_id}__review_overlay")
-        or overlays.get(f"{page_id}__all_symbols_overlay")
+    selected = overlays.get(f"{page_id}__review_overlay") or overlays.get(
+        f"{page_id}__all_symbols_overlay"
     )
     return _asset_bytes(selected) if selected is not None else None
 
@@ -820,9 +824,7 @@ def _restore_review_workspace(job: dict) -> None:
         job.get("detailed_rows", []),
         expected_fingerprint=str(job.get("fingerprint", "")),
         expected_score_id=str(report.get("score_id", "")),
-        expected_pipeline_version=str(
-            report.get("pipeline_version", PIPELINE_VERSION)
-        ),
+        expected_pipeline_version=str(report.get("pipeline_version", PIPELINE_VERSION)),
     )
     if errors:
         job["review_persistence_error"] = "; ".join(errors)
@@ -934,17 +936,17 @@ def _handle_note_image_click(
     st.session_state[last_click_key] = click_token
     snapped, distance = _snap_click_to_note_candidate(click, candidates, geometry)
     if snapped is None:
-        distance_text = (
-            f"（最近距離 {distance:.0f}px）" if distance is not None else ""
-        )
+        distance_text = f"（最近距離 {distance:.0f}px）" if distance is not None else ""
         st.session_state[feedback_key] = (
             "error",
             "點擊位置離 XML 音頭太遠，未套用" + distance_text,
         )
         return True
 
-    selected_value = _endpoint_note_input_value(snapped)
     target_key = manual_start_key if click_mode == "開始音符" else manual_end_key
+    selected_value, added = _toggle_endpoint_note_input(
+        str(st.session_state.get(target_key, "")), snapped, candidates
+    )
     st.session_state[target_key] = selected_value
     if not is_span:
         st.session_state[manual_start_key] = selected_value
@@ -953,7 +955,8 @@ def _handle_note_image_click(
     suffix = f"；note ID {note_id}" if note_id else "；此 XML 音符沒有 BPSD note ID"
     st.session_state[feedback_key] = (
         "success",
-        f"已選{click_mode}：{_review_note_label(snapped)}{suffix}",
+        f"已{'加入' if added else '取消'}{click_mode}："
+        f"{_review_note_label(snapped)}{suffix}",
     )
     return True
 
@@ -968,8 +971,12 @@ def _render_review_workspace(job: dict) -> None:
         st.warning("人工複核自動保存未完成：" + job["review_persistence_error"])
     detailed_rows = job["detailed_rows"]
     decisions = job.setdefault("review_decisions", {})
-    pages = sorted({str(row.get("page_id", "")) for row in detailed_rows if row.get("page_id")})
-    classes = sorted({str(row.get("class", "")) for row in detailed_rows if row.get("class")})
+    pages = sorted(
+        {str(row.get("page_id", "")) for row in detailed_rows if row.get("page_id")}
+    )
+    classes = sorted(
+        {str(row.get("class", "")) for row in detailed_rows if row.get("class")}
+    )
     with st.expander("篩選與跳轉（通常不用調整）", expanded=False):
         filter_left, filter_middle, filter_right = st.columns(3)
         selected_page = filter_left.selectbox(
@@ -1092,6 +1099,22 @@ def _render_review_workspace(job: dict) -> None:
         else str(current.get("page_id", ""))
     )
     is_span = str(current.get("target_type", "")) == "span" or cross_page_span
+    outside_xml_scope = (
+        str(current.get("error_code", "")) == "outside_musicxml_scope"
+        or str(current.get("movement_scope_status", "")) == "outside_bpsd_scope"
+        or str(current.get("page_mapping_status", "")) == "xml_missing"
+    )
+    machine_has_semantics = any(
+        str(current.get(field, "")).strip() not in {"", "NA"}
+        for field in (
+            "start_meas",
+            "end_meas",
+            "start_note",
+            "end_note",
+            "target_x_px",
+            "target_y_px",
+        )
+    )
     if cross_page_span:
         start_page_candidates = _merge_page_note_candidates(
             [], detailed_rows, start_page_id
@@ -1131,28 +1154,63 @@ def _render_review_workspace(job: dict) -> None:
             for candidate in note_candidates
             if str(candidate.get("note_id", "")) == current_end_note
             and (
-                not cross_page_span
-                or str(candidate.get("page_id", "")) == end_page_id
+                not cross_page_span or str(candidate.get("page_id", "")) == end_page_id
             )
         ),
         None,
     )
+
+    def endpoint_chord_candidates(anchor: dict | None) -> list[dict]:
+        if anchor is None:
+            return []
+        try:
+            connected_ids = {
+                str(note_id)
+                for note_id in json.loads(
+                    str(saved.get("connected_note", current.get("connected_note", "")))
+                    or "[]"
+                )
+            }
+        except (json.JSONDecodeError, TypeError):
+            connected_ids = set()
+        anchor_time = str(anchor.get("start_meas", "") or "").strip()
+        chord = [
+            candidate
+            for candidate in note_candidates
+            if _candidate_note_id(candidate) in connected_ids
+            and str(candidate.get("start_meas", "") or "").strip() == anchor_time
+        ]
+        if not any(
+            _candidate_note_id(candidate) == _candidate_note_id(anchor)
+            for candidate in chord
+        ):
+            chord.insert(0, anchor)
+        return chord
+
     manual_start_key = f"workspace_start_note_manual_{current['review_key']}"
     manual_end_key = f"workspace_end_note_manual_{current['review_key']}"
     if manual_start_key not in st.session_state:
-        st.session_state[manual_start_key] = _endpoint_note_input_value(
-            current_start_candidate
+        st.session_state[manual_start_key] = str(
+            saved.get("start_note_inputs", "")
+        ) or _endpoint_note_input_values(
+            endpoint_chord_candidates(current_start_candidate)
         )
     if manual_end_key not in st.session_state:
-        st.session_state[manual_end_key] = _endpoint_note_input_value(
-            current_end_candidate
+        st.session_state[manual_end_key] = str(
+            saved.get("end_note_inputs", "")
+        ) or _endpoint_note_input_values(
+            endpoint_chord_candidates(current_end_candidate)
         )
-    preview_start_endpoint, _preview_start_error = _resolve_endpoint_note_input(
+    preview_start_endpoints, _preview_start_error = _resolve_endpoint_note_inputs(
         st.session_state[manual_start_key], start_page_candidates
     )
-    preview_end_endpoint, _preview_end_error = _resolve_endpoint_note_input(
+    preview_end_endpoints, _preview_end_error = _resolve_endpoint_note_inputs(
         st.session_state[manual_end_key], end_page_candidates
     )
+    preview_start_endpoint = (
+        preview_start_endpoints[0] if preview_start_endpoints else None
+    )
+    preview_end_endpoint = preview_end_endpoints[0] if preview_end_endpoints else None
     if note_candidates and not is_span:
         candidate_keys = [
             "keep",
@@ -1170,6 +1228,7 @@ def _render_review_workspace(job: dict) -> None:
                 f"音高 {candidate.get('pitch') or '—'}｜"
                 f"時間 {candidate.get('start_meas') or '—'}"
             )
+
         selected_candidate_key = st.session_state.get(candidate_widget_key, "keep")
         if selected_candidate_key not in candidate_keys:
             selected_candidate_key = "keep"
@@ -1187,9 +1246,23 @@ def _render_review_workspace(job: dict) -> None:
     if preview_start_endpoint is not None:
         image_row["review_start_target_x_px"] = preview_start_endpoint.get("x_px", "")
         image_row["review_start_target_y_px"] = preview_start_endpoint.get("y_px", "")
+        image_row["review_start_targets_json"] = json.dumps(
+            [
+                {"x_px": candidate.get("x_px"), "y_px": candidate.get("y_px")}
+                for candidate in preview_start_endpoints
+            ],
+            ensure_ascii=False,
+        )
     if preview_end_endpoint is not None:
         image_row["review_end_target_x_px"] = preview_end_endpoint.get("x_px", "")
         image_row["review_end_target_y_px"] = preview_end_endpoint.get("y_px", "")
+        image_row["review_end_targets_json"] = json.dumps(
+            [
+                {"x_px": candidate.get("x_px"), "y_px": candidate.get("y_px")}
+                for candidate in preview_end_endpoints
+            ],
+            ensure_ascii=False,
+        )
 
     click_mode = "開始音符"
     if note_candidates and not cross_page_span:
@@ -1263,9 +1336,7 @@ def _render_review_workspace(job: dict) -> None:
         else None
     )
     end_page_image = (
-        _workspace_source_image_for_page(job, end_page_id)
-        if cross_page_span
-        else None
+        _workspace_source_image_for_page(job, end_page_id) if cross_page_span else None
     )
     with image_column:
         with st.container(key="review_sticky_image"):
@@ -1275,9 +1346,7 @@ def _render_review_workspace(job: dict) -> None:
                     f"跨頁符號：開始為 XML 第 {start_xml_page} 頁，"
                     f"結束為 XML 第 {end_xml_page} 頁。兩側音頭都可直接點選。"
                 )
-                feedback_key = (
-                    f"workspace_image_click_feedback_{current['review_key']}"
-                )
+                feedback_key = f"workspace_image_click_feedback_{current['review_key']}"
                 endpoint_panels = st.columns(2)
                 endpoint_specs = (
                     (
@@ -1287,6 +1356,7 @@ def _render_review_workspace(job: dict) -> None:
                         start_page_image,
                         current_start_candidate,
                         start_page_candidates,
+                        preview_start_endpoints,
                         "開始音符",
                         "start",
                     ),
@@ -1297,6 +1367,7 @@ def _render_review_workspace(job: dict) -> None:
                         end_page_image,
                         current_end_candidate,
                         end_page_candidates,
+                        preview_end_endpoints,
                         "結束音符",
                         "end",
                     ),
@@ -1308,6 +1379,7 @@ def _render_review_workspace(job: dict) -> None:
                     page_image,
                     endpoint_candidate,
                     page_candidates,
+                    selected_endpoints,
                     endpoint_mode,
                     surface,
                 ) in endpoint_specs:
@@ -1327,6 +1399,7 @@ def _render_review_workspace(job: dict) -> None:
                                     endpoint_candidate,
                                     page_candidates,
                                     role=surface,
+                                    selected_candidates=selected_endpoints,
                                 )
                             )
                         except ValueError as error:
@@ -1380,6 +1453,7 @@ def _render_review_workspace(job: dict) -> None:
                     st.rerun()
                 st.caption(
                     "青色 S＝開始端點；紫色 E＝結束端點；橙色數字＝可選 XML 音頭。"
+                    "同一端可連續點選整個和弦，再點一次即可取消。"
                 )
             elif source_image is not None:
                 try:
@@ -1450,10 +1524,18 @@ def _render_review_workspace(job: dict) -> None:
                             ("end_target_x_px", "end_target_y_px"),
                         )
                     )
-                    if has_notehead_target:
+                    if note_candidates:
                         st.caption(
-                            f"目前模式：{click_mode}。直接點音頭，系統會吸附到最近的 XML 音符。"
+                            f"目前模式：{click_mode}。可連續點選同一和弦的多個音頭；"
+                            "再點一次即可取消。"
                         )
+                    elif outside_xml_scope:
+                        st.warning(
+                            "此掃描頁超出上傳的 MusicXML／BPSD 範圍，"
+                            "因此沒有可吸附、可保存時間的 XML 音頭。"
+                        )
+                    elif has_notehead_target:
+                        st.caption("這筆有機器音頭座標，但缺少可供改選的候選清單。")
                     else:
                         st.warning("這筆沒有可畫出的機器音頭座標，請使用右側進階欄位。")
                     with st.expander("顯示完整頁", expanded=False):
@@ -1513,8 +1595,13 @@ def _render_review_workspace(job: dict) -> None:
                 else note_candidates[int(selected_candidate_key) - 1]
             )
             st.caption("選橘色編號即可更正，不需要自己查 note ID。")
+        elif not is_span and outside_xml_scope:
+            st.warning(
+                "這一頁不在上傳的 MusicXML／BPSD 範圍內，不能用圖片選音頭。"
+                "YOLO 框仍會保留；請選擇「僅保留掃描符號」或「稍後再看」。"
+            )
         elif not is_span:
-            st.info("舊版結果沒有音頭候選；重新 Align 這一批頁面後即可使用。")
+            st.info("此結果沒有音頭候選；請用目前版本重新 Align 這一批頁面。")
 
         with st.expander("機器判定詳情", expanded=False):
             detail_left, detail_right = st.columns(2)
@@ -1536,19 +1623,23 @@ def _render_review_workspace(job: dict) -> None:
                         "開始音符",
                         key=manual_start_key,
                         placeholder="例如：52, 下, E3, 2",
+                        help="可在左圖連續點選同一和弦的多個音頭。",
                     )
                 with endpoint_right:
                     end_input = st.text_input(
                         "結束音符",
                         key=manual_end_key,
                         placeholder="例如：53, 上, G4, 1",
+                        help="可在左圖連續點選同一和弦的多個音頭。",
                     )
-                start_endpoint, start_error = _resolve_endpoint_note_input(
+                start_endpoints, start_error = _resolve_endpoint_note_inputs(
                     start_input, start_page_candidates
                 )
-                end_endpoint, end_error = _resolve_endpoint_note_input(
+                end_endpoints, end_error = _resolve_endpoint_note_inputs(
                     end_input, end_page_candidates
                 )
+                start_endpoint = start_endpoints[0] if start_endpoints else None
+                end_endpoint = end_endpoints[0] if end_endpoints else None
                 endpoint_errors = [error for error in (start_error, end_error) if error]
                 if start_error:
                     st.error(f"開始音符：{start_error}")
@@ -1556,7 +1647,9 @@ def _render_review_workspace(job: dict) -> None:
                     st.error(f"結束音符：{end_error}")
                 st.caption(
                     "格式：小節, 上／下, 音高, 該 staff 在小節內由左到右第幾個音。"
-                    "例如 `52, 下, E3, 2`；清空代表不確定並留空。"
+                    "多個和弦音以分號隔開，例如 "
+                    "`52, 上, C4, 1 ; 52, 上, E4, 2 ; 52, 上, G4, 3`；"
+                    "清空代表不確定並留空。"
                 )
                 start_note = _candidate_note_id(start_endpoint)
                 end_note = _candidate_note_id(end_endpoint)
@@ -1564,6 +1657,7 @@ def _render_review_workspace(job: dict) -> None:
                 end_choice = end_input
             else:
                 start_endpoint = end_endpoint = None
+                start_endpoints = end_endpoints = []
                 start_choice = end_choice = "keep"
                 endpoint_errors = []
                 st.warning("這是舊版結果，沒有可選音符清單；可暫時輸入 note ID。")
@@ -1586,9 +1680,7 @@ def _render_review_workspace(job: dict) -> None:
                     if start_endpoint is not None
                     else saved.get("start_meas", current.get("start_meas", ""))
                 ),
-                key=(
-                    f"workspace_start_{current['review_key']}_{start_choice}"
-                ),
+                key=(f"workspace_start_{current['review_key']}_{start_choice}"),
             )
             end_meas = field_middle.text_input(
                 "結束時間",
@@ -1606,7 +1698,9 @@ def _render_review_workspace(job: dict) -> None:
             )
             connected_note = st.text_input(
                 "Connected note IDs",
-                value=str(saved.get("connected_note", current.get("connected_note", ""))),
+                value=str(
+                    saved.get("connected_note", current.get("connected_note", ""))
+                ),
                 key=f"workspace_connected_{current['review_key']}",
             )
             corrected_class_id = st.text_input(
@@ -1628,6 +1722,11 @@ def _render_review_workspace(job: dict) -> None:
     def save_decision(action: str, note_candidate: dict | None = None) -> None:
         corrected_target = note_candidate or {}
         corrected_note_id = _candidate_note_id(corrected_target)
+        selected_endpoint_ids = [
+            _candidate_note_id(candidate)
+            for candidate in [*start_endpoints, *end_endpoints]
+            if _candidate_note_id(candidate)
+        ]
         if action == "confirm" and note_candidate is None:
             decision_start_note = str(current.get("start_note", ""))
             decision_end_note = str(current.get("end_note", ""))
@@ -1660,15 +1759,17 @@ def _render_review_workspace(job: dict) -> None:
                 json.dumps(
                     [
                         int(note_id) if str(note_id).isdigit() else note_id
-                        for note_id in dict.fromkeys([start_note, end_note])
+                        for note_id in dict.fromkeys(selected_endpoint_ids)
                         if str(note_id).strip()
                     ]
                 )
                 if action != "confirm"
                 and note_candidate is None
-                and (start_endpoint is not None or end_endpoint is not None)
+                and selected_endpoint_ids
                 else corrected_connected
             ),
+            "start_note_inputs": start_input if note_candidates else "",
+            "end_note_inputs": end_input if note_candidates else "",
             "staff": corrected_staff,
             "comment": comment,
             "review_target_x_px": str(
@@ -1681,20 +1782,30 @@ def _render_review_workspace(job: dict) -> None:
                 corrected_target.get("pitch", saved.get("review_target_pitch", ""))
             ),
             "review_start_target_x_px": str(
-                start_endpoint.get("x_px", "")
-                if start_endpoint is not None
-                else ""
+                start_endpoint.get("x_px", "") if start_endpoint is not None else ""
             ),
             "review_start_target_y_px": str(
-                start_endpoint.get("y_px", "")
-                if start_endpoint is not None
-                else ""
+                start_endpoint.get("y_px", "") if start_endpoint is not None else ""
             ),
             "review_end_target_x_px": str(
                 end_endpoint.get("x_px", "") if end_endpoint is not None else ""
             ),
             "review_end_target_y_px": str(
                 end_endpoint.get("y_px", "") if end_endpoint is not None else ""
+            ),
+            "review_start_targets_json": json.dumps(
+                [
+                    {"x_px": candidate.get("x_px"), "y_px": candidate.get("y_px")}
+                    for candidate in start_endpoints
+                ],
+                ensure_ascii=False,
+            ),
+            "review_end_targets_json": json.dumps(
+                [
+                    {"x_px": candidate.get("x_px"), "y_px": candidate.get("y_px")}
+                    for candidate in end_endpoints
+                ],
+                ensure_ascii=False,
             ),
         }
         job["review_decisions"] = decisions
@@ -1709,17 +1820,19 @@ def _render_review_workspace(job: dict) -> None:
         with st.container(key="review_action_bar"):
             st.markdown("#### ③ 儲存並前往下一筆")
             clicked_action = None
-            if st.button(
-                "✓ 機器答案正確",
-                type="primary" if selected_candidate is None else "secondary",
-                use_container_width=True,
-                help="保留青色圈與機器時間，然後自動前往下一筆。",
-            ):
-                clicked_action = "confirm"
-            if st.button(
+            if machine_has_semantics:
+                if st.button(
+                    "✓ 機器答案正確",
+                    type="primary" if selected_candidate is None else "secondary",
+                    use_container_width=True,
+                    help="保留青色圈與機器時間，然後自動前往下一筆。",
+                ):
+                    clicked_action = "confirm"
+            else:
+                st.info("這筆沒有可確認的機器時間／音頭答案。")
+            if selected_candidate is not None and st.button(
                 "✓ 儲存所選音頭更正",
-                type="primary" if selected_candidate is not None else "secondary",
-                disabled=selected_candidate is None,
+                type="primary",
                 use_container_width=True,
                 help="以綠色 C 的音頭更新時間、note ID 與 staff，然後自動前往下一筆。",
             ):
@@ -1731,7 +1844,10 @@ def _render_review_workspace(job: dict) -> None:
                 disabled=bool(endpoint_errors)
                 or (start_endpoint is None and end_endpoint is None),
                 use_container_width=True,
-                help="儲存圖片中 S✓／E✓ 對應的時間與 note ID。",
+                help=(
+                    "儲存圖片中所有 S✓／E✓ 音頭；端點代表音寫入 "
+                    "start_note／end_note，完整和弦寫入 connected_note。"
+                ),
             ):
                 save_decision("correct")
                 st.rerun()
@@ -1744,11 +1860,7 @@ def _render_review_workspace(job: dict) -> None:
                     "儲存手動欄位更正",
                     use_container_width=True,
                     disabled=bool(endpoint_errors),
-                    help=(
-                        "請先修正開始／結束音符格式"
-                        if endpoint_errors
-                        else None
-                    ),
+                    help=("請先修正開始／結束音符格式" if endpoint_errors else None),
                 ):
                     clicked_action = "correct"
                 if st.button("僅保留掃描符號", use_container_width=True):
@@ -1820,9 +1932,7 @@ def _render_review_workspace(job: dict) -> None:
                 detailed_rows,
                 expected_fingerprint=job["fingerprint"],
                 expected_score_id=job["report"].get("score_id", ""),
-                expected_pipeline_version=job["report"].get(
-                    "pipeline_version", ""
-                ),
+                expected_pipeline_version=job["report"].get("pipeline_version", ""),
             )
             if restore_errors:
                 for error in restore_errors:
@@ -1897,7 +2007,9 @@ def _render_completed_job(job: dict) -> None:
             if corrected_csv is not None
             else "Download final BPS-OMR CSV"
         ),
-        corrected_csv if corrected_csv is not None else _asset_bytes(job["final_bps_csv"]),
+        corrected_csv
+        if corrected_csv is not None
+        else _asset_bytes(job["final_bps_csv"]),
         "bps_omr_final.csv",
         "text/csv",
         type="primary",
@@ -1920,15 +2032,12 @@ def _render_completed_job(job: dict) -> None:
                 "Score image",
                 list(review_pages),
                 format_func=lambda page_id: (
-                    f"{page_id} "
-                    f"({review_pages[page_id]['needs_review']} needs review)"
+                    f"{page_id} ({review_pages[page_id]['needs_review']} needs review)"
                 ),
                 key="review_page_select",
             )
             selected_page_data = review_pages[selected_page]
-            overview_tab, class_tab = st.tabs(
-                ["Overview", "One class at a time"]
-            )
+            overview_tab, class_tab = st.tabs(["Overview", "One class at a time"])
             with overview_tab:
                 review_overlay = selected_page_data["review_overlay"]
                 if review_overlay is not None:
@@ -2020,9 +2129,7 @@ def _render_completed_job(job: dict) -> None:
                 "written start": row.get(
                     "start_xml_measure", row.get("xml_measure", "")
                 ),
-                "written end": row.get(
-                    "end_xml_measure", row.get("xml_measure", "")
-                ),
+                "written end": row.get("end_xml_measure", row.get("xml_measure", "")),
                 "BPSD start": row.get("start_meas", ""),
                 "BPSD end": row.get("end_meas", ""),
                 "match source": row.get("match_source", ""),
@@ -2083,6 +2190,12 @@ with align_tab:
         "A clean score used for image geometry must be the repetition version, "
         "not the unfolded version."
     )
+    st.warning(
+        "重要範圍檢查：score_pdf_scan 的掃描圖片與 "
+        "score_pdf_repetitions、Repetition MusicXML、BPSD note CSV 必須涵蓋"
+        "相同樂章與小節範圍。不要加入額外掃描頁或其他樂章，否則那些頁面"
+        "無法取得可靠時間、note ID 或可點選的 XML 音頭。"
+    )
     left, right = st.columns(2)
     with left:
         image_uploads = st.file_uploader(
@@ -2134,7 +2247,9 @@ with align_tab:
             help=(
                 "Upload the one whole-score PDF matching Repetition MusicXML. "
                 "It improves system, barline, notehead, slur, and tie geometry. "
-                "Do not use score_pdf_unfolded."
+                "Do not use score_pdf_unfolded. If its pagination cannot cover "
+                "the uploaded scan page numbers, it is safely ignored and the "
+                "alignment continues from the scanned pages."
             ),
         )
         resume_job_upload = st.file_uploader(
@@ -2177,19 +2292,18 @@ with align_tab:
             st.error(pairing_error)
         else:
             pairing_rows = [
-                    {
-                        "page stem": pair["stem"],
-                        "MusicXML page": pair["page_number"],
-                        "Scan system starts": ", ".join(
-                            str(value)
-                            for value in pair.get("system_start_measures", [])
-                        ),
-                        "Scan page end": pair.get("page_end_measure"),
-                        "image": pair["image"].name,
-                        "YOLO TXT": pair["yolo"].name,
-                    }
-                    for pair in page_pairs
-                ]
+                {
+                    "page stem": pair["stem"],
+                    "MusicXML page": pair["page_number"],
+                    "Scan system starts": ", ".join(
+                        str(value) for value in pair.get("system_start_measures", [])
+                    ),
+                    "Scan page end": pair.get("page_end_measure"),
+                    "image": pair["image"].name,
+                    "YOLO TXT": pair["yolo"].name,
+                }
+                for pair in page_pairs
+            ]
             edited_pairing = st.data_editor(
                 pairing_rows,
                 key="page_pairing_editor",
@@ -2230,9 +2344,7 @@ with align_tab:
                     if hasattr(edited_pairing, "to_dict")
                     else list(edited_pairing)
                 )
-                page_pairs = apply_page_mapping_edits(
-                    page_pairs, edited_pairing_rows
-                )
+                page_pairs = apply_page_mapping_edits(page_pairs, edited_pairing_rows)
             except ValueError as error:
                 pairing_error = str(error)
                 st.error(pairing_error)
@@ -2245,7 +2357,9 @@ with align_tab:
         use_container_width=True,
     )
     if start:
-        page_files = [item for pair in page_pairs for item in (pair["image"], pair["yolo"])]
+        page_files = [
+            item for pair in page_pairs for item in (pair["image"], pair["yolo"])
+        ]
         labels_and_uploads = [
             *[(f"Page file {uploaded.name}", uploaded) for uploaded in page_files],
             ("MusicXML", xml_upload),
@@ -2269,7 +2383,7 @@ with align_tab:
         else:
             st.caption(
                 f"Upload batch: {upload_totals['files']} files, "
-                f"{upload_totals['bytes'] / (1024 ** 2):.1f} MB"
+                f"{upload_totals['bytes'] / (1024**2):.1f} MB"
             )
         if upload_batch_valid and all(
             _valid_upload(uploaded, label) for label, uploaded in labels_and_uploads
@@ -2300,7 +2414,9 @@ with align_tab:
             )
             cached = st.session_state.get("raw_alignment_job")
             if cached and cached.get("fingerprint") == fingerprint:
-                st.info("The inputs match the completed session checkpoint; reusing outputs.")
+                st.info(
+                    "The inputs match the completed session checkpoint; reusing outputs."
+                )
             else:
                 try:
                     background_dir = _queue_background_job(
@@ -2317,7 +2433,9 @@ with align_tab:
                         owner_id=options["owner_id"],
                     )
                 except Exception as error:
-                    st.error(f"Unable to queue background job: {type(error).__name__}: {error}")
+                    st.error(
+                        f"Unable to queue background job: {type(error).__name__}: {error}"
+                    )
                 else:
                     st.session_state["background_alignment_job"] = {
                         "fingerprint": fingerprint,

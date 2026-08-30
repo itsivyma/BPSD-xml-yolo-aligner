@@ -1,10 +1,13 @@
 import json
 
 from bpsd_aligner.review_workspace import (
+    endpoint_note_input_values,
     fill_missing_note_orders,
     merge_page_note_candidates,
     resolve_endpoint_note_input,
+    resolve_endpoint_note_inputs,
     snap_click_to_note_candidate,
+    toggle_endpoint_note_input,
 )
 
 
@@ -57,3 +60,54 @@ def test_merge_page_candidates_deduplicates_legacy_rows():
 
     assert len(merged) == 1
     assert merged[0]["page_id"] == "page-1"
+
+
+def test_endpoint_chord_can_select_and_toggle_multiple_noteheads():
+    candidates = [
+        {
+            "candidate_id": f"c{index}",
+            "printed_measure": 52,
+            "start_meas": 51.0,
+            "staff": 1,
+            "pitch": pitch,
+            "measure_note_order": index,
+            "note_id": 100 + index,
+        }
+        for index, pitch in enumerate(("C4", "E4", "G4"), start=1)
+    ]
+
+    value = ""
+    for candidate in candidates:
+        value, added = toggle_endpoint_note_input(value, candidate, candidates)
+        assert added is True
+
+    resolved, error = resolve_endpoint_note_inputs(value, candidates)
+    assert error == ""
+    assert [candidate["note_id"] for candidate in resolved] == [101, 102, 103]
+    assert value == endpoint_note_input_values(candidates)
+
+    value, added = toggle_endpoint_note_input(value, candidates[1], candidates)
+    assert added is False
+    resolved, error = resolve_endpoint_note_inputs(value, candidates)
+    assert error == ""
+    assert [candidate["note_id"] for candidate in resolved] == [101, 103]
+
+
+def test_endpoint_chord_rejects_notes_from_different_onsets():
+    candidates = [
+        {
+            "printed_measure": 52,
+            "start_meas": start,
+            "staff": 1,
+            "pitch": pitch,
+            "measure_note_order": index,
+            "note_id": index,
+        }
+        for index, (start, pitch) in enumerate(((51.0, "C4"), (51.5, "E4")), 1)
+    ]
+    value = endpoint_note_input_values(candidates)
+
+    resolved, error = resolve_endpoint_note_inputs(value, candidates)
+
+    assert resolved == []
+    assert "同一開始時間" in error

@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw
 from bpsd_aligner.web_pipeline import (
     FINAL_BPS_FIELDS,
     PIPELINE_VERSION,
+    _compact_warning,
     build_batch_information_outputs,
     build_final_bps_rows,
     build_output_zip,
@@ -21,7 +22,7 @@ from bpsd_aligner.web_pipeline import (
     finalize_uploaded_batch,
 )
 from bpsd_aligner.job_store import request_job_cancellation, write_job_manifest
-from bpsd_aligner.web_worker import run_background_job
+from bpsd_aligner.web_worker import _compatible_clean_pdf, run_background_job
 from bpsd_aligner.provenance import pipeline_code_signature
 from bpsd_aligner.pipeline_checkpoint import atomic_write_json
 
@@ -157,6 +158,17 @@ def test_safe_identifier_is_collision_resistant_after_sanitizing() -> None:
         "page-1", "page"
     )
     assert len(safe_identifier("x" * 200, "page")) <= 80
+
+
+def test_legacy_missing_time_warning_is_compacted() -> None:
+    values = ", ".join(str(value) for value in range(1, 31))
+    warning = _compact_warning(
+        "YOLO rows intentionally retain blank start/end time until confirmed: "
+        + values
+    )
+
+    assert "30 rows" in warning
+    assert "(+10 more)" in warning
 
 
 def test_uploaded_alignment_rejects_box_crossing_image_boundary(tmp_path) -> None:
@@ -501,6 +513,67 @@ def test_background_worker_completes_and_resumes_page_checkpoint(tmp_path):
     request_job_cancellation(job_dir)
     run_background_job(request_path)
     assert json.loads((job_dir / "job_status.json").read_text())["state"] == "cancelled"
+
+
+def test_background_worker_disables_clean_pdf_with_incompatible_pagination(
+    tmp_path, monkeypatch
+):
+    clean_pdf = tmp_path / "clean.pdf"
+    clean_pdf.write_bytes(b"pdf placeholder")
+    monkeypatch.setattr("bpsd_aligner.web_worker.pdf_page_count", lambda _path: 3)
+
+    compatible, warning = _compatible_clean_pdf(
+        clean_pdf,
+        [{"page_number": 1}, {"page_number": 7}],
+    )
+
+    assert compatible is None
+    assert "3 pages" in warning
+    assert "scan page 7" in warning
+    assert "alignment used the scanned pages instead" in warning
+
+
+def test_uploaded_alignment_preserves_yolo_rows_outside_musicxml_page_scope(
+    tmp_path,
+):
+    inputs = _write_uploads(tmp_path)
+    prepared = prepare_score_sources(
+        xml_path=inputs["xml_path"],
+        bps_notes_path=inputs["bps_notes_path"],
+        output_dir=tmp_path / "shared",
+        score_id="outside-scope-test",
+    )
+
+    report = run_uploaded_alignment(
+        **inputs,
+        output_dir=tmp_path / "page-4",
+        page_number=4,
+        score_id="outside-scope-test",
+        prepared_score=prepared,
+        build_complete_exports=False,
+        render_qa_images=False,
+        render_class_overlays=False,
+        render_auxiliary_overlays=False,
+    )
+
+    with Path(report["outputs"]["yolo_aligned_csv"]).open(
+        newline="", encoding="utf-8-sig"
+    ) as file:
+        rows = list(csv.DictReader(file))
+    with Path(report["outputs"]["final_bps_csv"]).open(
+        newline="", encoding="utf-8-sig"
+    ) as file:
+        final_rows = list(csv.DictReader(file))
+
+    assert report["passed"] is True
+    assert len(rows) == len(final_rows) == 2
+    assert {row["movement_scope_status"] for row in rows} == {
+        "outside_bpsd_scope"
+    }
+    assert {row["page_mapping_status"] for row in rows} == {"xml_missing"}
+    assert all(row["start_meas"] == "" and row["start_note"] == "" for row in rows)
+    assert all(row["start_meas"] == "" and row["start_note"] == "" for row in final_rows)
+    assert any("Every YOLO box was preserved" in item for item in report["warnings"])
 
 
 def _read_csv_with_fields(path: Path) -> tuple[list[str], list[dict]]:

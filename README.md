@@ -3,6 +3,21 @@
 把掃描樂譜上的 YOLO bounding boxes 對齊 MusicXML 與 BPSD note
 annotations，輸出符合 BPS-OMR 欄位的 CSV，並提供圖片式人工複核。
 
+## 第一次使用：照這四步即可
+
+1. 安裝並啟動網站。
+2. 上傳掃描圖片、同名 YOLO TXT、`notes.json`、Repetition MusicXML 與
+   BPSD note CSV。
+3. 按 **Align all uploaded pages**，完成後逐筆檢查圖片。
+4. 下載 `bps_omr_final.csv`。
+
+> **重要：樂譜範圍必須一致。** 掃描圖片通常取自
+> `score_pdf_scan`，乾淨 PDF 取自 `score_pdf_repetitions`。兩者必須涵蓋
+> 相同樂章與小節範圍，且也要符合上傳的 Repetition MusicXML 與 BPSD CSV。
+> 不要把只有掃描譜才有的其他樂章或後續頁面一起上傳。例如 XML/PDF 只到
+> 第 100 小節，就不能同批加入掃描譜第 132–168 小節；否則那些頁面沒有
+> 可對照的時間、note ID 或可點選音頭。
+
 ```bash
 git clone https://github.com/itsivyma/BPSD-xml-yolo-aligner.git
 cd BPSD-xml-yolo-aligner
@@ -36,7 +51,7 @@ bpsd-aligner --help
 
 | 欄位 | 應上傳的版本 | 必要 |
 |---|---|---|
-| Score images | 掃描頁面圖片；可一次多選 | 是 |
+| Score images | 從 `score_pdf_scan` 取出的掃描頁面；可一次多選 | 是 |
 | YOLO TXT files | 與圖片同 stem 的 TXT；可一次多選 | 是 |
 | YOLO class map | 同一批 YOLO 的 `notes.json` | 是 |
 | Repetition MusicXML | `score_xml_repetitions/*.xml` | 是 |
@@ -45,13 +60,22 @@ bpsd-aligner --help
 | Clean repetition PDF | `score_pdf_repetitions/*.pdf` | 建議 |
 
 不要上傳 `.sib` 或 `score_pdf_unfolded`。圖片與 TXT 必須一一同名配對。
+請再次確認掃描頁面沒有超出 `score_pdf_repetitions`、Repetition MusicXML 與
+BPSD note CSV 涵蓋的樂章／小節範圍。
 
 網站主流程只有四步：
 
 1. 上傳整首曲目的頁面與共用資料。
 2. 按 **Align all uploaded pages**；工作在背景逐頁 checkpoint。
-3. 在 Review workspace 檢查 overview、單一 class、跨頁端點，並直接點音頭更正。
+3. 在 Review workspace 檢查 overview、單一 class、跨頁端點，並直接點音頭更正；
+   和弦端點可連續點選多個音頭，再點一次可取消。
 4. 下載頁面頂端的 `bps_omr_final.csv`。
+
+### 圖片中為什麼沒有可點選音頭？
+
+本系統不是直接從黑色像素猜 note ID，而是把 MusicXML/BPSD 音符投影到掃描
+圖片。如果某一掃描頁超出 XML/BPSD 範圍，YOLO 框仍會保留，但時間、note ID
+與音頭候選會留空。此時請改用範圍相符的資料，或只保留掃描符號。
 
 ## 最終 CSV
 
