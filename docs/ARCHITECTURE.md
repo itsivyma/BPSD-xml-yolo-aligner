@@ -43,13 +43,13 @@ BPSD note CSV ──────── official time and note IDs ────�
 
 | Module | Responsibility |
 |---|---|
-| `bps_xml_alignment.py` | Current single-page matching engine and compatibility facade |
+| `bpsd_aligner/bps_xml_alignment.py` | Current single-page matching engine and compatibility facade |
 | `bpsd_aligner/candidate_scoring.py` | Generic one-to-one pairing, mutual-best checks and candidate margins |
 | `bpsd_aligner/geometry.py` | Staff/system detection, barlines and box-to-system assignment |
 | `bpsd_aligner/overlay.py` | Pure in-memory and file review-overlay rendering |
-| `repeat_mapping.py` | Written-to-performance repeat occurrence mapping |
-| `xml_export.py` | Lossless MusicXML nodes/events export |
-| `combine_yolo_xml.py` | Lossless XML + YOLO research tables |
+| `bpsd_aligner/repeat_mapping.py` | Written-to-performance repeat occurrence mapping |
+| `bpsd_aligner/xml_export.py` | Lossless MusicXML nodes/events export |
+| `bpsd_aligner/combine_yolo_xml.py` | Lossless XML + YOLO research tables |
 | `bpsd_aligner/web_pipeline.py` | Shared-score preprocessing and multi-page orchestration |
 | `bpsd_aligner/web.py` | Streamlit presentation and Review controller; no direct matcher import |
 | `bpsd_aligner/web_worker.py` | Sole website alignment execution path with page checkpoints |
@@ -98,7 +98,8 @@ persistent job directory after identity validation.
 
 ## Safe future decomposition
 
-`bps_xml_alignment.py` and `web.py` remain the largest modules. Split them by
+`bpsd_aligner/bps_xml_alignment.py` and `bpsd_aligner/web.py` remain the largest
+modules. Split them by
 moving behavior without changing it:
 
 Geometry, overlay rendering and generic candidate scoring have already been

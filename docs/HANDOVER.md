@@ -52,7 +52,7 @@ Never update the baseline until a human has verified the changed assignments.
 
 ## Recommended next work
 
-1. Continue decomposing `bps_xml_alignment.py`. Geometry, rendering and generic
+1. Continue decomposing `bpsd_aligner/bps_xml_alignment.py`. Geometry, rendering and generic
    candidate scoring are isolated; point and span matchers remain behind the
    compatibility facade.
 2. Continue decomposing `web.py` into upload, job status and result renderers.
@@ -89,12 +89,12 @@ See `.env.example` and `docs/WEB_USAGE.md` for the exact environment variables.
 
 ## Files a new maintainer should read first
 
-1. `START_HERE.md`
+1. `README.md`
 2. `docs/ARCHITECTURE.md`
 3. `bpsd_aligner/class_registry.py`
 4. `bpsd_aligner/web_pipeline.py`
-5. focused sections of `bps_xml_alignment.py`
+5. focused sections of `bpsd_aligner/bps_xml_alignment.py`
 6. the test matching the feature being changed
 
-Root-level research scripts should be consulted only when reproducing an older
+`tools/research/` should be consulted only when reproducing an older
 class-specific experiment.

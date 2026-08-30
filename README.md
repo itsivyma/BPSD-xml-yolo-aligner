@@ -132,21 +132,23 @@ reverse proxy／SSO 後方，並監控 `bpsd-aligner job-admin status` 的失敗
 
 ## 維護入口
 
-1. [START_HERE.md](START_HERE.md) — 新使用者與維護者快速上手。
+1. 本 README — 安裝、輸入、輸出與日常使用。
 2. [Architecture](docs/ARCHITECTURE.md) — 資料流與模組責任。
 3. [Development](docs/DEVELOPMENT.md) — 新 class、matcher 與回歸流程。
 4. [Handover](docs/HANDOVER.md) — 已知限制與下一步研究工作。
 5. [Web usage](docs/WEB_USAGE.md) — 上傳、review、部署細節。
+6. [CSV schema](docs/CSV_SCHEMA.md) — 最終 BPS-OMR 欄位規則。
 
 主要程式責任：
 
 - `bpsd_aligner/schema.py`：正式 CSV 欄位唯一來源。
 - `bpsd_aligner/web_pipeline.py`：多頁 orchestration 與 compact outputs。
-- `bps_xml_alignment.py`：相容入口與 matcher；新邏輯優先拆到 package module。
-- `repeat_mapping.py`：反覆 occurrence 與安全狀態。
+- `bpsd_aligner/bps_xml_alignment.py`：matcher 相容入口。
+- `bpsd_aligner/repeat_mapping.py`：反覆 occurrence 與安全狀態。
 - `bpsd_aligner/job_store.py`：持久化、簽章 checkpoint、quota 與 retention。
 - `bpsd_aligner/review_corrections.py`：人工答案驗證與 final CSV 套用。
 
+`tools/research/` 只保存可重現舊實驗的選用工具，不會打包進正式 wheel。
 Beethoven 原始資料、產生的 CSV／圖片與本機 job 目錄不在 repository 中。
 
 ## License
