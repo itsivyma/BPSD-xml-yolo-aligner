@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from bps_xml_alignment import (
+from bpsd_aligner.bps_xml_alignment import (
     assign_system,
     detect_systems,
     load_categories,

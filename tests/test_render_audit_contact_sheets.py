@@ -3,8 +3,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from pipeline_checkpoint import valid_png
-from render_audit_contact_sheets import render_audit_sheets
+from bpsd_aligner.pipeline_checkpoint import valid_png
+from tools.research.render_audit_contact_sheets import render_audit_sheets
 
 
 def test_render_audit_sheets_groups_duplicate_sources_and_resumes(tmp_path: Path):

@@ -1,8 +1,8 @@
 import csv
 from pathlib import Path
 
-from build_review_queue import QUEUE_FIELDS
-from reduce_review_queue import reduce_review_queue
+from bpsd_aligner.build_review_queue import QUEUE_FIELDS
+from bpsd_aligner.reduce_review_queue import reduce_review_queue
 
 
 def _write(path: Path, fields: list[str], rows: list[dict]) -> None:

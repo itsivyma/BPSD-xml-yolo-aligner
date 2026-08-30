@@ -71,6 +71,8 @@ def test_apply_confirm_correct_and_reject_produces_strict_outputs():
             "end_note": "40",
             "connected_note": "[30, 40]",
             "staff": "2",
+            "review_start_targets_json": '[{"x_px": 10, "y_px": 20}]',
+            "review_end_targets_json": '[{"x_px": 30, "y_px": 40}]',
             "comment": "endpoint corrected",
         }
     )
@@ -96,6 +98,9 @@ def test_apply_confirm_correct_and_reject_produces_strict_outputs():
         "correct",
         "reject",
     ]
+    assert payload["entries"][1]["review_start_targets_json"] == (
+        '[{"x_px": 10, "y_px": 20}]'
+    )
     assert accuracy["reviewed_rows"] == 3
     assert accuracy["by_class"]["slur"]["exact_accuracy"] == 1.0
     assert accuracy["by_class"]["tie"]["exact_accuracy"] == 0.0
@@ -251,9 +256,12 @@ def test_review_queue_filters_and_prioritizes_unreviewed_low_confidence():
 
     assert [row["review_key"] for row in queue] == ["page-01:Y1", "page-01:Y2"]
     assert queue[1]["saved_action"] == "confirm"
-    assert [row["review_key"] for row in build_review_queue(
-        [first, second, third], machine_status="matched", include_matched=True
-    )] == ["page-01:Y3"]
+    assert [
+        row["review_key"]
+        for row in build_review_queue(
+            [first, second, third], machine_status="matched", include_matched=True
+        )
+    ] == ["page-01:Y3"]
 
 
 def test_matched_spot_check_is_deterministic_and_class_balanced():
@@ -270,8 +278,10 @@ def test_matched_spot_check_is_deterministic_and_class_balanced():
         (row["class"], row["txt_line"]) for row in second
     ]
     assert len(first) == 4
-    assert {class_name: sum(row["class"] == class_name for row in first)
-            for class_name in ("slur", "tie")} == {"slur": 2, "tie": 2}
+    assert {
+        class_name: sum(row["class"] == class_name for row in first)
+        for class_name in ("slur", "tie")
+    } == {"slur": 2, "tie": 2}
 
 
 def test_render_review_focus_images_keeps_native_pixels_and_highlights_bbox():
@@ -340,6 +350,30 @@ def test_render_cross_page_endpoint_uses_notehead_without_false_bbox():
     assert geometry["left"] < 600 < geometry["left"] + geometry["width"]
 
 
+def test_render_cross_page_endpoint_draws_every_selected_chord_note():
+    source = Image.new("RGB", (1000, 800), "white")
+    data = io.BytesIO()
+    source.save(data, format="PNG")
+    candidates = [
+        {"x_px": 600, "y_px": 400, "note_id": 9},
+        {"x_px": 660, "y_px": 400, "note_id": 10},
+    ]
+
+    full_data, _crop_data, _geometry = render_review_endpoint_images(
+        data.getvalue(),
+        candidates[0],
+        candidates,
+        role="end",
+        selected_candidates=candidates,
+    )
+
+    with Image.open(io.BytesIO(full_data)) as full:
+        for point_x in (600, 660):
+            outline = full.getpixel((point_x, 386))
+            assert outline[0] > 60
+            assert outline[2] > 60
+
+
 def test_workspace_special_decisions_change_corrected_output_conservatively():
     details = [
         _detail(1, "slur", "review", "1.0", "2.0"),
@@ -365,7 +399,9 @@ def test_workspace_special_decisions_change_corrected_output_conservatively():
     assert len(final_rows) == 2
     by_class = {row["class"]: row for row in final_rows}
     assert by_class["slur"]["start_meas"] == ""
-    corrected_class_row = next(row for row in final_rows if row["human_corrected"] == "1")
+    corrected_class_row = next(
+        row for row in final_rows if row["human_corrected"] == "1"
+    )
     assert corrected_class_row["class"] == "slur"
     assert corrected_class_row["class_id"] == "57"
     assert corrected_class_row["start_note"] == ""
@@ -413,9 +449,7 @@ def test_review_checkpoint_round_trip_validates_current_alignment():
         expected_pipeline_version="pipeline-2",
     )
     assert restored == {}
-    assert errors == [
-        "checkpoint row not found in current alignment: page-01:Y99"
-    ]
+    assert errors == ["checkpoint row not found in current alignment: page-01:Y99"]
 
 
 def test_review_checkpoint_rejects_missing_or_different_alignment_fingerprint():

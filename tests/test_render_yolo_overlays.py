@@ -3,8 +3,8 @@ from pathlib import Path
 
 from PIL import Image
 
-import render_yolo_overlays
-from render_yolo_overlays import render_dataset
+from bpsd_aligner import render_yolo_overlays
+from bpsd_aligner.render_yolo_overlays import render_dataset
 
 
 def test_render_dataset_writes_two_overlays_and_indexes(tmp_path: Path) -> None:

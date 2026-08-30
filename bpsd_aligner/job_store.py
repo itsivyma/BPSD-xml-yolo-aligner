@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from pipeline_checkpoint import atomic_write_json
+from bpsd_aligner.pipeline_checkpoint import atomic_write_json
 
 
 DEFAULT_MAX_FILES = 500

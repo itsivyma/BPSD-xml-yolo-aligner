@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from bps_xml_alignment import (
+from bpsd_aligner.bps_xml_alignment import (
     align_barlines_from_reference,
     attach_bps_note_ids,
     detect_systems,
@@ -19,8 +19,12 @@ from bps_xml_alignment import (
     note_pixel_position,
     parse_musicxml_page,
 )
-from slur_endpoint_check import _endpoint_geometry, _font, _measure_boundaries_for_page
-from staccato_batch_check import _box_pixels, _chord_notes
+from tools.research.slur_endpoint_check import (
+    _endpoint_geometry,
+    _font,
+    _measure_boundaries_for_page,
+)
+from tools.research.staccato_batch_check import _box_pixels, _chord_notes
 
 
 FERMATA_CLASSES = {"fermataAbove", "fermataBelow"}

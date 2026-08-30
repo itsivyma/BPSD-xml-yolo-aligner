@@ -1,6 +1,6 @@
 from PIL import Image
 
-from bps_xml_alignment import render_overlay
+from bpsd_aligner.bps_xml_alignment import render_overlay
 from bpsd_aligner.overlay import render_alignment_overlay
 
 

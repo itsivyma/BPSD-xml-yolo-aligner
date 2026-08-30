@@ -26,21 +26,6 @@ bpsd-aligner = "bpsd_aligner.cli:main"
 
 [tool.setuptools]
 packages = ["bpsd_aligner"]
-py-modules = [
-  "alignment_review_sheets",
-  "apply_human_audit_feedback",
-  "batch_align",
-  "bps_xml_alignment",
-  "build_review_queue",
-  "combine_yolo_xml",
-  "dataset_dry_run",
-  "dataset_inventory",
-  "pipeline_checkpoint",
-  "reduce_review_queue",
-  "render_yolo_overlays",
-  "repeat_mapping",
-  "xml_export",
-]
 
 [tool.pytest.ini_options]
 addopts = "-q"

@@ -7,7 +7,7 @@ import csv
 import json
 from pathlib import Path
 
-from pipeline_checkpoint import (
+from bpsd_aligner.pipeline_checkpoint import (
     atomic_write_csv,
     atomic_write_json,
     emit_progress,

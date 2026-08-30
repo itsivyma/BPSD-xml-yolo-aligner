@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from pipeline_checkpoint import atomic_write_csv
+from bpsd_aligner.pipeline_checkpoint import atomic_write_csv
 
 
 CANDIDATE_FIELDS = ("candidate_id", "candidate_json")

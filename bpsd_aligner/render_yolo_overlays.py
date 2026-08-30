@@ -9,8 +9,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from bps_xml_alignment import load_categories, load_yolo
-from pipeline_checkpoint import (
+from bpsd_aligner.bps_xml_alignment import load_categories, load_yolo
+from bpsd_aligner.pipeline_checkpoint import (
     atomic_save_png,
     atomic_write_csv,
     atomic_write_text,

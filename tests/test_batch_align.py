@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from batch_align import discover_pages
+from bpsd_aligner.batch_align import discover_pages
 
 
 def test_discover_pages_pairs_numeric_suffixes_and_reports_missing(tmp_path: Path):

@@ -55,7 +55,7 @@ from bpsd_aligner.overlay import (
 from bpsd_aligner.span_semantics import endpoint_note_ids, index_chord_members
 from bpsd_aligner.schema import BPS_OMR_FIELDS
 from bpsd_aligner.thresholds import auto_accept_threshold
-from repeat_mapping import repeat_mapping_is_safe
+from bpsd_aligner.repeat_mapping import repeat_mapping_is_safe
 
 
 DYNAMIC_CLASS_BY_GLYPH = {

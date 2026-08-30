@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from bps_xml_alignment import (
+from bpsd_aligner.bps_xml_alignment import (
     align_barlines_from_reference,
     attach_bps_note_ids,
     detect_systems,
@@ -17,7 +17,7 @@ from bps_xml_alignment import (
     load_yolo,
     parse_musicxml_page,
 )
-from slur_endpoint_check import (
+from tools.research.slur_endpoint_check import (
     _draw_endpoint,
     _draw_yolo_boxes,
     _endpoint_geometry,

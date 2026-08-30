@@ -8,7 +8,7 @@ import os
 import time
 from pathlib import Path
 
-from bpsd_aligner.job_store import job_store_root, prune_job_store
+from bpsd_aligner.job_store import job_store_root, prune_job_store, write_job_status
 from bpsd_aligner.web_worker import run_background_job
 
 
@@ -40,6 +40,30 @@ def _prune_if_configured(root: Path) -> None:
         configured = "168"
     if configured:
         prune_job_store(root=root, retention_hours=float(configured))
+
+
+def _mark_dispatch_failure(request: Path, error: Exception) -> None:
+    """Stop a preflight failure from remaining queued and spinning forever."""
+
+    job_dir = request.parent
+    status_path = job_dir / "job_status.json"
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        status = {}
+    # Failures raised after the worker starts are already persisted by the
+    # worker. Only repair errors raised during request/code-signature preflight.
+    if status.get("state") != "queued":
+        return
+    write_job_status(
+        job_dir,
+        state="failed",
+        stage="dispatcher_preflight",
+        completed_pages=int(status.get("completed_pages", 0) or 0),
+        total_pages=int(status.get("total_pages", 0) or 0),
+        message="The background worker could not start this alignment job.",
+        error=f"{type(error).__name__}: {error}",
+    )
 
 
 def acquire_dispatcher_lock(root: Path) -> Path | None:
@@ -94,8 +118,13 @@ def run_dispatcher(
 
     completed = 0
     idle_checks = 0
+    attempted_failures: set[Path] = set()
     while idle_checks < max_idle_checks:
-        requests = queued_requests(root)
+        requests = [
+            request
+            for request in queued_requests(root)
+            if request not in attempted_failures
+        ]
         if not requests:
             idle_checks += 1
             _prune_if_configured(root)
@@ -106,10 +135,12 @@ def run_dispatcher(
         for request in requests:
             try:
                 run_background_job(request)
-            except Exception:
-                # The worker has already persisted a failed status and traceback.
-                # Continue draining unrelated jobs instead of blocking the queue.
-                pass
+            except Exception as error:
+                attempted_failures.add(request)
+                # The worker persists failures raised after its preflight. If
+                # validation fails before that try/finally block, repair the
+                # still-queued status here so the dispatcher cannot busy-loop.
+                _mark_dispatch_failure(request, error)
             completed += 1
             _prune_if_configured(root)
     return completed

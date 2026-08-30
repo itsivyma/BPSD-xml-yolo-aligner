@@ -76,6 +76,13 @@ def _staff_pattern_candidates(
             minimum_strength = min(strengths)
             if average_strength < 0.38 or minimum_strength < 0.25:
                 continue
+            # Scanner margins can contain several uniformly dark horizontal
+            # bands. Unlike staff lines, every sampled row then spans almost
+            # the entire crop without interruption. Reject that page-border
+            # artifact before it can turn an otherwise valid even staff count
+            # into an odd one.
+            if minimum_strength > 0.98:
+                continue
 
             # Prefer strong complete patterns, then patterns whose selected
             # rows stay closest to the proposed equal spacing.

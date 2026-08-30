@@ -3,7 +3,7 @@ import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from xml_export import BPS_FIELDS, EVENT_FIELDS, export_dataset, export_score
+from bpsd_aligner.xml_export import BPS_FIELDS, EVENT_FIELDS, export_dataset, export_score
 
 
 MUSICXML = """<?xml version="1.0" encoding="UTF-8"?>

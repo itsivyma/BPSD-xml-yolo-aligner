@@ -18,6 +18,7 @@ Open the URL printed by Streamlit, normally `http://localhost:8501`.
    and one checkpoint per completed page.
 3. **Review**: inspect the overview or one class at a time. The main workspace
    supports previous/next navigation, typed endpoints, direct notehead clicks,
+   multi-note chord endpoint selection (click again to remove a note),
    cross-page spans and automatic save of explicit decisions.
 4. **Download**: use the final CSV button at the top of the result. After
    applying review decisions, it becomes the reviewed final CSV.
@@ -27,11 +28,20 @@ selected in one upload. If scan systems do not start at the same written
 measures as MusicXML systems, edit the optional scan-system anchors in the
 pairing table; otherwise leave them blank.
 
+## Critical range check
+
+Score images are normally extracted from `score_pdf_scan`; the clean reference
+comes from `score_pdf_repetitions`. Upload only scan pages covered by the same
+movement and measure range in the repetition PDF, Repetition MusicXML and BPSD
+note CSV. Do not include later movements or extra scan pages merely because
+they are present in the scan PDF. Out-of-range YOLO boxes are preserved, but
+their time, note IDs and clickable XML noteheads must remain blank.
+
 ## Correct dataset versions
 
 | Field | Version |
 |---|---|
-| Score images | Scanned pages, normally `finished/Xia/images` |
+| Score images | Pages from `score_pdf_scan`, normally `finished/Xia/images` |
 | YOLO TXT | Matching `finished/Xia/labels` |
 | YOLO class map | Matching `finished/Xia/notes.json` |
 | Repetition MusicXML | `score_xml_repetitions/*.xml` |

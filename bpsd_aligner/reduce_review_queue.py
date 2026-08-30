@@ -8,8 +8,8 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from build_review_queue import QUEUE_FIELDS
-from pipeline_checkpoint import (
+from bpsd_aligner.build_review_queue import QUEUE_FIELDS
+from bpsd_aligner.pipeline_checkpoint import (
     atomic_write_csv,
     atomic_write_json,
     emit_progress,

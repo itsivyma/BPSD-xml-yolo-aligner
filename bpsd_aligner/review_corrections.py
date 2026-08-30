@@ -13,7 +13,11 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from pipeline_checkpoint import atomic_write_csv, atomic_write_json, emit_progress
+from bpsd_aligner.pipeline_checkpoint import (
+    atomic_write_csv,
+    atomic_write_json,
+    emit_progress,
+)
 
 
 REVIEW_ACTIONS = (
@@ -143,7 +147,9 @@ def normalize_legacy_review_rows(paths: list[Path]) -> tuple[list[dict], list[st
             if not end_note and note_ids:
                 end_note = note_ids[-1]
             if not note_ids:
-                note_ids = list(dict.fromkeys([item for item in (start_note, end_note) if item]))
+                note_ids = list(
+                    dict.fromkeys([item for item in (start_note, end_note) if item])
+                )
             connected = json.dumps(note_ids, ensure_ascii=False) if note_ids else ""
             output.append(
                 {
@@ -237,9 +243,7 @@ def build_review_checkpoint(
         "pipeline_version": _text(pipeline_version),
         "reviewer": _text(reviewer) or "User",
         "saved_at": datetime.now(timezone.utc).isoformat(),
-        "entries": [
-            decisions[key] for key in sorted(decisions)
-        ],
+        "entries": [decisions[key] for key in sorted(decisions)],
     }
 
 
@@ -340,9 +344,9 @@ def build_review_queue(
             continue
         item = dict(source)
         item["review_key"] = review_row_key(source)
-        item["saved_action"] = _text(
-            decisions.get(item["review_key"], {}).get("action")
-        ) or "pending"
+        item["saved_action"] = (
+            _text(decisions.get(item["review_key"], {}).get("action")) or "pending"
+        )
         queue.append(item)
 
     def confidence(row: dict) -> float:
@@ -428,6 +432,29 @@ def render_review_focus_images(
             return None
         return point_x, point_y
 
+    def optional_points_json(field: str) -> list[tuple[float, float]]:
+        try:
+            payload = json.loads(_text(row.get(field)) or "[]")
+        except json.JSONDecodeError:
+            return []
+        points = []
+        if not isinstance(payload, list):
+            return points
+        for item in payload:
+            try:
+                if isinstance(item, dict):
+                    point_x = float(item["x_px"])
+                    point_y = float(item["y_px"])
+                else:
+                    point_x = float(item[0])
+                    point_y = float(item[1])
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            point = (point_x, point_y)
+            if 0 <= point_x < width and 0 <= point_y < height and point not in points:
+                points.append(point)
+        return points
+
     start_target = optional_point("target_x_px", "target_y_px")
     end_target = optional_point("end_target_x_px", "end_target_y_px")
     review_target = optional_point("review_target_x_px", "review_target_y_px")
@@ -437,8 +464,12 @@ def render_review_focus_images(
     review_end_target = optional_point(
         "review_end_target_x_px", "review_end_target_y_px"
     )
+    review_start_targets = optional_points_json("review_start_targets_json")
+    review_end_targets = optional_points_json("review_end_targets_json")
     try:
-        raw_candidates = json.loads(_text(row.get("review_note_candidates_json")) or "[]")
+        raw_candidates = json.loads(
+            _text(row.get("review_note_candidates_json")) or "[]"
+        )
     except json.JSONDecodeError:
         raw_candidates = []
     review_candidates = []
@@ -466,9 +497,7 @@ def render_review_focus_images(
     full_draw = ImageDraw.Draw(full)
     stroke = max(3, round(min(width, height) * 0.0025))
     if show_bbox:
-        full_draw.rectangle(
-            (left, top, right, bottom), outline="#e31a1c", width=stroke
-        )
+        full_draw.rectangle((left, top, right, bottom), outline="#e31a1c", width=stroke)
 
     marker_radius = max(14, round(min(width, height) * 0.012))
     marker_font = ImageFont.load_default()
@@ -538,9 +567,22 @@ def render_review_focus_images(
     selected_targets = []
     if review_target is not None:
         selected_targets.append((review_target, "#00a651", "C"))
-    if review_start_target is not None:
+    if (
+        review_start_target is not None
+        and review_start_target not in review_start_targets
+    ):
+        review_start_targets.insert(0, review_start_target)
+    if review_end_target is not None and review_end_target not in review_end_targets:
+        review_end_targets.insert(0, review_end_target)
+    for index, target in enumerate(review_start_targets, start=1):
+        label = "S✓" if len(review_start_targets) == 1 else f"S✓{index}"
+        selected_targets.append((target, "#00a651", label))
+    if review_start_target is not None and not review_start_targets:
         selected_targets.append((review_start_target, "#00a651", "S✓"))
-    if review_end_target is not None:
+    for index, target in enumerate(review_end_targets, start=1):
+        label = "E✓" if len(review_end_targets) == 1 else f"E✓{index}"
+        selected_targets.append((target, "#7b2cbf", label))
+    if review_end_target is not None and not review_end_targets:
         selected_targets.append((review_end_target, "#7b2cbf", "E✓"))
     for point, label in review_candidates:
         draw_target(
@@ -677,6 +719,7 @@ def render_review_endpoint_images(
     page_candidates: list[dict],
     *,
     role: str,
+    selected_candidates: list[dict] | None = None,
 ) -> tuple[bytes, bytes, dict]:
     """Render one cross-page endpoint without drawing a false YOLO box."""
 
@@ -697,10 +740,17 @@ def render_review_endpoint_images(
         "h": max(0.006, 18 / height),
         "target_x_px" if is_start else "end_target_x_px": point_x,
         "target_y_px" if is_start else "end_target_y_px": point_y,
-        "review_note_candidates_json": json.dumps(
-            page_candidates, ensure_ascii=False
-        ),
+        "review_note_candidates_json": json.dumps(page_candidates, ensure_ascii=False),
     }
+    selected_points = [
+        {"x_px": selected.get("x_px"), "y_px": selected.get("y_px")}
+        for selected in (selected_candidates or [])
+        if selected.get("x_px") is not None and selected.get("y_px") is not None
+    ]
+    if selected_points:
+        row["review_start_targets_json" if is_start else "review_end_targets_json"] = (
+            json.dumps(selected_points, ensure_ascii=False)
+        )
     return render_review_focus_images(
         image_data,
         row,
@@ -793,7 +843,9 @@ def apply_review_decisions(
                     f"{key[0]}:Y{key[1]} {field} must be an integer note ID or blank"
                 )
             elif value and valid_note_ids is not None and value not in valid_note_ids:
-                errors.append(f"{key[0]}:Y{key[1]} {field} note ID {value} does not exist")
+                errors.append(
+                    f"{key[0]}:Y{key[1]} {field} note ID {value} does not exist"
+                )
         for value in connected_ids:
             if not value.isdigit():
                 errors.append(
@@ -835,7 +887,10 @@ def apply_review_decisions(
                     f"{key[0]}:Y{key[1]} wrong_class requires corrected class ID "
                     "and class name"
                 )
-            elif class_map is not None and class_map.get(corrected_class_id) != corrected_class:
+            elif (
+                class_map is not None
+                and class_map.get(corrected_class_id) != corrected_class
+            ):
                 errors.append(
                     f"{key[0]}:Y{key[1]} class ID {corrected_class_id} maps to "
                     f"{class_map.get(corrected_class_id, 'no class')}, not {corrected_class}"
@@ -908,9 +963,7 @@ def apply_review_decisions(
                     )
             elif action == "wrong_class":
                 ground_truth = {field: "" for field in EVALUATION_FIELDS}
-                final_source["class_id"] = _text(
-                    decision.get("corrected_class_id")
-                )
+                final_source["class_id"] = _text(decision.get("corrected_class_id"))
                 final_source["class"] = _text(decision.get("corrected_class"))
                 for field in SEMANTIC_FIELDS:
                     final_source[field] = ""
@@ -932,9 +985,7 @@ def apply_review_decisions(
                     "page_id": key[0],
                     "yolo_line": key[1],
                     "class": _text(source.get("class")),
-                    "corrected_class_id": _text(
-                        decision.get("corrected_class_id")
-                    ),
+                    "corrected_class_id": _text(decision.get("corrected_class_id")),
                     "corrected_class": _text(decision.get("corrected_class")),
                     "action": action,
                     "reviewer": reviewer,
@@ -942,15 +993,9 @@ def apply_review_decisions(
                     "original": machine_values,
                     "corrected": ground_truth,
                     "staff": final_source["xml_staff"],
-                    "review_target_x_px": _text(
-                        decision.get("review_target_x_px")
-                    ),
-                    "review_target_y_px": _text(
-                        decision.get("review_target_y_px")
-                    ),
-                    "review_target_pitch": _text(
-                        decision.get("review_target_pitch")
-                    ),
+                    "review_target_x_px": _text(decision.get("review_target_x_px")),
+                    "review_target_y_px": _text(decision.get("review_target_y_px")),
+                    "review_target_pitch": _text(decision.get("review_target_pitch")),
                     "review_start_target_x_px": _text(
                         decision.get("review_start_target_x_px")
                     ),
@@ -962,6 +1007,12 @@ def apply_review_decisions(
                     ),
                     "review_end_target_y_px": _text(
                         decision.get("review_end_target_y_px")
+                    ),
+                    "review_start_targets_json": _text(
+                        decision.get("review_start_targets_json")
+                    ),
+                    "review_end_targets_json": _text(
+                        decision.get("review_end_targets_json")
                     ),
                     "comment": _text(decision.get("comment")),
                 }
@@ -1058,13 +1109,9 @@ def apply_corrections_to_master_rows(
             if _text(decision.get("review_start_target_y_px")):
                 row["target_y_px"] = _text(decision.get("review_start_target_y_px"))
             if _text(decision.get("review_end_target_x_px")):
-                row["end_target_x_px"] = _text(
-                    decision.get("review_end_target_x_px")
-                )
+                row["end_target_x_px"] = _text(decision.get("review_end_target_x_px"))
             if _text(decision.get("review_end_target_y_px")):
-                row["end_target_y_px"] = _text(
-                    decision.get("review_end_target_y_px")
-                )
+                row["end_target_y_px"] = _text(decision.get("review_end_target_y_px"))
         elif action == "wrong_class":
             row["class_id"] = _text(decision.get("corrected_class_id"))
             row["class"] = _text(decision.get("corrected_class"))
@@ -1119,8 +1166,7 @@ def build_accuracy_report(items: list[dict]) -> dict:
             eligible = [
                 row
                 for row in rows
-                if row.get("action") == "reject"
-                or _text(row["expected"].get(field))
+                if row.get("action") == "reject" or _text(row["expected"].get(field))
             ]
             correct = sum(
                 _equivalent(
@@ -1139,8 +1185,7 @@ def build_accuracy_report(items: list[dict]) -> dict:
             eligible_fields = [
                 field
                 for field in EVALUATION_FIELDS
-                if row.get("action") == "reject"
-                or _text(row["expected"].get(field))
+                if row.get("action") == "reject" or _text(row["expected"].get(field))
             ]
             if eligible_fields and all(
                 _equivalent(
@@ -1266,9 +1311,7 @@ def main() -> None:
     if args.predictions is not None:
         with args.predictions.open(newline="", encoding="utf-8-sig") as file:
             predictions = list(csv.DictReader(file))
-        inferred_page_id = args.predictions.name.removesuffix(
-            "_alignment_detailed.csv"
-        )
+        inferred_page_id = args.predictions.name.removesuffix("_alignment_detailed.csv")
         for prediction in predictions:
             prediction["page_id"] = _text(prediction.get("page_id")) or inferred_page_id
         accuracy, accuracy_errors = evaluate_ground_truth_rows(rows, predictions)
@@ -1281,7 +1324,9 @@ def main() -> None:
         report["validation_errors"] = errors
         report["passed"] = not errors
     atomic_write_json(report_path, report)
-    emit_progress("review-evaluation", 2, 2, f"passed={report['passed']} rows={len(rows)}")
+    emit_progress(
+        "review-evaluation", 2, 2, f"passed={report['passed']} rows={len(rows)}"
+    )
     if errors:
         raise SystemExit(1)
 
