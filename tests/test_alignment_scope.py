@@ -1,4 +1,4 @@
-from alignment_scope import resolve_system_mapping
+from tools.research.alignment_scope import resolve_system_mapping
 
 
 def test_resolve_system_mapping_defaults_to_identity_then_outside_scope() -> None:

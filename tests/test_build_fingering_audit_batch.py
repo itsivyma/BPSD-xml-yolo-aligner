@@ -1,4 +1,4 @@
-from build_fingering_audit_batch import select_audit_rows
+from tools.research.build_fingering_audit_batch import select_audit_rows
 
 
 def _row(index: int, status: str, confidence: str, page: str, cls: str) -> dict:

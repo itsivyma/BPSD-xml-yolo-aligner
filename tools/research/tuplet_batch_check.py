@@ -18,8 +18,12 @@ from bps_xml_alignment import (
     load_yolo,
     parse_musicxml_page,
 )
-from slur_endpoint_check import _endpoint_geometry, _font, _measure_boundaries_for_page
-from staccato_batch_check import _box_pixels
+from tools.research.slur_endpoint_check import (
+    _endpoint_geometry,
+    _font,
+    _measure_boundaries_for_page,
+)
+from tools.research.staccato_batch_check import _box_pixels
 
 
 TUPLET_CLASSES = {"tuplet3", "tuplet5", "tuplet6"}

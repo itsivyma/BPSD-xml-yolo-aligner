@@ -1,5 +1,5 @@
 from bps_xml_alignment import StaffGeometry, SystemGeometry
-from slur_batch_candidates import (
+from tools.research.slur_batch_candidates import (
     assign_box_system,
     classify_proposal,
     score_box_against_segment,

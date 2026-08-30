@@ -25,7 +25,7 @@ from bps_xml_alignment import (
     load_yolo,
     parse_musicxml_page,
 )
-from slur_endpoint_check import (
+from tools.research.slur_endpoint_check import (
     _endpoint_geometry,
     _find_endpoint_note,
     _font,
