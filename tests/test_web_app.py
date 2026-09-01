@@ -245,8 +245,8 @@ def test_completed_job_exposes_human_review_editor_and_apply_button():
         item for item in result.selectbox if item.label == "目前項目（可直接跳到其他筆）"
     )
     assert selector.value == "page-01:Y2"
-    assert any(field.label == "開始音符" for field in result.text_input)
-    assert any(field.label == "結束音符" for field in result.text_input)
+    assert any(field.label == "開始音符（可複選）" for field in result.text_input)
+    assert any(field.label == "結束音符（可複選）" for field in result.text_input)
     assert not any(item.label == "開始音符" for item in result.selectbox)
     assert not any(item.label == "結束音符" for item in result.selectbox)
 

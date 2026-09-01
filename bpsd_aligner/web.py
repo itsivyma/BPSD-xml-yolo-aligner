@@ -57,7 +57,7 @@ from bpsd_aligner.review_workspace import (
     resolve_endpoint_note_inputs as _resolve_endpoint_note_inputs,
     review_note_label as _review_note_label,
     snap_click_to_note_candidate as _snap_click_to_note_candidate,
-    toggle_endpoint_note_input as _toggle_endpoint_note_input,
+    toggle_endpoint_selection as _toggle_endpoint_selection,
 )
 from bpsd_aligner.web_utils import (
     apply_page_mapping_edits,
@@ -943,14 +943,18 @@ def _handle_note_image_click(
         )
         return True
 
-    target_key = manual_start_key if click_mode == "開始音符" else manual_end_key
-    selected_value, added = _toggle_endpoint_note_input(
-        str(st.session_state.get(target_key, "")), snapped, candidates
+    role = "start" if click_mode == "開始音符" else "end"
+    start_value, end_value, added = _toggle_endpoint_selection(
+        role=role,
+        start_value=str(st.session_state.get(manual_start_key, "")),
+        end_value=str(st.session_state.get(manual_end_key, "")),
+        candidate=snapped,
+        start_candidates=candidates,
+        end_candidates=candidates,
+        mirror_point_symbol=not is_span,
     )
-    st.session_state[target_key] = selected_value
-    if not is_span:
-        st.session_state[manual_start_key] = selected_value
-        st.session_state[manual_end_key] = selected_value
+    st.session_state[manual_start_key] = start_value
+    st.session_state[manual_end_key] = end_value
     note_id = _candidate_note_id(snapped)
     suffix = f"；note ID {note_id}" if note_id else "；此 XML 音符沒有 BPSD note ID"
     st.session_state[feedback_key] = (
@@ -1620,14 +1624,14 @@ def _render_review_workspace(job: dict) -> None:
                 endpoint_left, endpoint_right = st.columns(2)
                 with endpoint_left:
                     start_input = st.text_input(
-                        "開始音符",
+                        "開始音符（可複選）",
                         key=manual_start_key,
                         placeholder="例如：52, 下, E3, 2",
                         help="可在左圖連續點選同一和弦的多個音頭。",
                     )
                 with endpoint_right:
                     end_input = st.text_input(
-                        "結束音符",
+                        "結束音符（可複選）",
                         key=manual_end_key,
                         placeholder="例如：53, 上, G4, 1",
                         help="可在左圖連續點選同一和弦的多個音頭。",
@@ -1645,6 +1649,11 @@ def _render_review_workspace(job: dict) -> None:
                     st.error(f"開始音符：{start_error}")
                 if end_error:
                     st.error(f"結束音符：{end_error}")
+                if not start_error and not end_error:
+                    st.caption(
+                        f"目前已選：開始 {len(start_endpoints)} 個音；"
+                        f"結束 {len(end_endpoints)} 個音。"
+                    )
                 st.caption(
                     "格式：小節, 上／下, 音高, 該 staff 在小節內由左到右第幾個音。"
                     "多個和弦音以分號隔開，例如 "
