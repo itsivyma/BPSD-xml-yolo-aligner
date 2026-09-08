@@ -8,6 +8,7 @@ from bpsd_aligner.review_workspace import (
     resolve_endpoint_note_inputs,
     snap_click_to_note_candidate,
     toggle_endpoint_note_input,
+    toggle_endpoint_selection,
 )
 
 
@@ -111,3 +112,63 @@ def test_endpoint_chord_rejects_notes_from_different_onsets():
 
     assert resolved == []
     assert "同一開始時間" in error
+
+
+def test_end_endpoint_can_select_multiple_notes_without_overwriting_start():
+    start_candidates = [
+        {
+            "candidate_id": "start-c",
+            "printed_measure": 10,
+            "start_meas": 9.0,
+            "staff": 1,
+            "pitch": "C4",
+            "measure_note_order": 1,
+            "note_id": 10,
+        }
+    ]
+    end_candidates = [
+        {
+            "candidate_id": f"end-{index}",
+            "printed_measure": 11,
+            "start_meas": 10.0,
+            "staff": 1,
+            "pitch": pitch,
+            "measure_note_order": index,
+            "note_id": 20 + index,
+        }
+        for index, pitch in enumerate(("D4", "F4", "A4"), start=1)
+    ]
+    start_value = endpoint_note_input_values(start_candidates)
+    end_value = ""
+
+    for candidate in end_candidates:
+        start_value, end_value, added = toggle_endpoint_selection(
+            role="end",
+            start_value=start_value,
+            end_value=end_value,
+            candidate=candidate,
+            start_candidates=start_candidates,
+            end_candidates=end_candidates,
+        )
+        assert added is True
+
+    resolved_start, start_error = resolve_endpoint_note_inputs(
+        start_value, start_candidates
+    )
+    resolved_end, end_error = resolve_endpoint_note_inputs(end_value, end_candidates)
+    assert start_error == end_error == ""
+    assert [candidate["note_id"] for candidate in resolved_start] == [10]
+    assert [candidate["note_id"] for candidate in resolved_end] == [21, 22, 23]
+
+    start_value, end_value, added = toggle_endpoint_selection(
+        role="end",
+        start_value=start_value,
+        end_value=end_value,
+        candidate=end_candidates[1],
+        start_candidates=start_candidates,
+        end_candidates=end_candidates,
+    )
+    assert added is False
+    resolved_end, end_error = resolve_endpoint_note_inputs(end_value, end_candidates)
+    assert end_error == ""
+    assert [candidate["note_id"] for candidate in resolved_end] == [21, 23]

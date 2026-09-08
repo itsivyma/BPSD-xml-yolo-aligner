@@ -229,6 +229,34 @@ def toggle_endpoint_note_input(
     return endpoint_note_input_values(selected), True
 
 
+def toggle_endpoint_selection(
+    *,
+    role: str,
+    start_value: str,
+    end_value: str,
+    candidate: dict,
+    start_candidates: list[dict],
+    end_candidates: list[dict],
+    mirror_point_symbol: bool = False,
+) -> tuple[str, str, bool]:
+    """Toggle one endpoint notehead without overwriting the opposite chord.
+
+    Span endpoints are independent multi-selections. Point symbols may opt in
+    to mirroring because their start and end represent the same note or chord.
+    """
+
+    if role not in {"start", "end"}:
+        raise ValueError("endpoint role must be start or end")
+    current = start_value if role == "start" else end_value
+    candidates = start_candidates if role == "start" else end_candidates
+    updated, added = toggle_endpoint_note_input(current, candidate, candidates)
+    if mirror_point_symbol:
+        return updated, updated, added
+    if role == "start":
+        return updated, end_value, added
+    return start_value, updated, added
+
+
 def snap_click_to_note_candidate(
     click: dict,
     candidates: list[dict],
