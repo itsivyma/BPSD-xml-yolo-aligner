@@ -128,6 +128,31 @@ def candidate_note_id(candidate: dict | None) -> str:
     return str(candidate["note_id"])
 
 
+def certain_endpoint_note_ids(candidates: list[dict]) -> tuple[list[str], bool]:
+    """Return unique BPSD IDs only when every selected note is identifiable.
+
+    BPSD note annotations do not carry voice or staff.  Two rows can therefore
+    share the same time and pitch, making their exact row IDs interchangeable
+    and impossible to prove from the score image alone.  Such selections, and
+    XML-only notes without a BPSD row, must stay blank in strict output.
+    """
+
+    note_ids = []
+    uncertain = False
+    for candidate in candidates:
+        note_id = candidate_note_id(candidate)
+        ambiguous = str(candidate.get("note_id_ambiguous", "")).lower() in {
+            "1",
+            "true",
+        }
+        if not note_id or ambiguous:
+            uncertain = True
+            continue
+        if note_id not in note_ids:
+            note_ids.append(note_id)
+    return ([] if uncertain else note_ids), uncertain
+
+
 def normalize_pitch(value: object) -> str:
     return str(value or "").strip().replace("♯", "#").replace("♭", "b").upper()
 
@@ -237,12 +262,12 @@ def toggle_endpoint_selection(
     candidate: dict,
     start_candidates: list[dict],
     end_candidates: list[dict],
-    mirror_point_symbol: bool = False,
 ) -> tuple[str, str, bool]:
     """Toggle one endpoint notehead without overwriting the opposite chord.
 
-    Span endpoints are independent multi-selections. Point symbols may opt in
-    to mirroring because their start and end represent the same note or chord.
+    Start and end are always independent multi-selections.  Even when the
+    machine classified an item as a point symbol, a human correction must not
+    silently overwrite the opposite endpoint.
     """
 
     if role not in {"start", "end"}:
@@ -250,8 +275,6 @@ def toggle_endpoint_selection(
     current = start_value if role == "start" else end_value
     candidates = start_candidates if role == "start" else end_candidates
     updated, added = toggle_endpoint_note_input(current, candidate, candidates)
-    if mirror_point_symbol:
-        return updated, updated, added
     if role == "start":
         return updated, end_value, added
     return start_value, updated, added

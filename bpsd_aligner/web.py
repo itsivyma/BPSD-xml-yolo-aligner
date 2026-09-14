@@ -14,7 +14,6 @@ from pathlib import Path
 
 import streamlit as st
 from PIL import Image
-from streamlit_image_coordinates import streamlit_image_coordinates
 
 from bpsd_aligner.web_pipeline import (
     FINAL_BPS_FIELDS,
@@ -51,6 +50,7 @@ from bpsd_aligner.review_candidates import hydrate_review_candidates
 from bpsd_aligner.review_workspace import (
     candidate_note_id as _candidate_note_id,
     candidate_printed_measure as _candidate_printed_measure,
+    certain_endpoint_note_ids as _certain_endpoint_note_ids,
     endpoint_note_input_values as _endpoint_note_input_values,
     fill_missing_note_orders as _fill_missing_note_orders,
     merge_page_note_candidates as _merge_page_note_candidates,
@@ -72,6 +72,7 @@ from bpsd_aligner.web_security import (
     verify_access_token,
 )
 from bpsd_aligner.pipeline_checkpoint import atomic_write_json
+from bpsd_aligner.zoomable_image import zoomable_image_coordinates
 
 
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
@@ -923,7 +924,6 @@ def _handle_note_image_click(
     manual_start_key: str,
     manual_end_key: str,
     feedback_key: str,
-    is_span: bool,
 ) -> bool:
     """Apply one new image click to review state and request a UI rerun."""
 
@@ -951,7 +951,6 @@ def _handle_note_image_click(
         candidate=snapped,
         start_candidates=candidates,
         end_candidates=candidates,
-        mirror_point_symbol=not is_span,
     )
     st.session_state[manual_start_key] = start_value
     st.session_state[manual_end_key] = end_value
@@ -1289,7 +1288,7 @@ def _render_review_workspace(job: dict) -> None:
             padding: 0.35rem 0.5rem 0.75rem;
             border-radius: 0.75rem;
             height: 68vh;
-            overflow-x: hidden;
+            overflow-x: auto;
             overflow-y: auto;
         }
         .st-key-review_sticky_image img {
@@ -1410,14 +1409,14 @@ def _render_review_workspace(job: dict) -> None:
                             st.warning(str(error))
                             continue
                         with Image.open(io.BytesIO(endpoint_crop)) as rendered_endpoint:
-                            endpoint_click = streamlit_image_coordinates(
+                            endpoint_click = zoomable_image_coordinates(
                                 rendered_endpoint.copy(),
-                                use_column_width="always",
                                 key=(
                                     f"review_click_cross_{surface}_"
                                     f"{current['review_key']}"
                                 ),
                                 cursor="crosshair",
+                                max_height=420,
                             )
                         if _handle_note_image_click(
                             endpoint_click,
@@ -1429,12 +1428,19 @@ def _render_review_workspace(job: dict) -> None:
                             manual_start_key=manual_start_key,
                             manual_end_key=manual_end_key,
                             feedback_key=feedback_key,
-                            is_span=True,
                         ):
                             st.rerun()
                         st.caption(_review_note_label(endpoint_candidate))
                         with st.expander(f"顯示{label}完整頁", expanded=False):
-                            st.image(endpoint_full, use_container_width=True)
+                            with Image.open(io.BytesIO(endpoint_full)) as full_endpoint:
+                                zoomable_image_coordinates(
+                                    full_endpoint.copy(),
+                                    key=(
+                                        f"review_zoom_cross_full_{surface}_"
+                                        f"{current['review_key']}"
+                                    ),
+                                    max_height=520,
+                                )
                 feedback = st.session_state.get(feedback_key)
                 if feedback:
                     getattr(st, feedback[0])(feedback[1])
@@ -1474,11 +1480,11 @@ def _render_review_workspace(job: dict) -> None:
                             f"workspace_image_click_feedback_{current['review_key']}"
                         )
                         with Image.open(io.BytesIO(crop_image)) as rendered_crop:
-                            click = streamlit_image_coordinates(
+                            click = zoomable_image_coordinates(
                                 rendered_crop.copy(),
-                                use_column_width="always",
                                 key=f"review_click_image_{current['review_key']}",
                                 cursor="crosshair",
+                                max_height=520,
                             )
                         if _handle_note_image_click(
                             click,
@@ -1490,7 +1496,6 @@ def _render_review_workspace(job: dict) -> None:
                             manual_start_key=manual_start_key,
                             manual_end_key=manual_end_key,
                             feedback_key=feedback_key,
-                            is_span=is_span,
                         ):
                             st.rerun()
                         feedback = st.session_state.get(feedback_key)
@@ -1545,14 +1550,14 @@ def _render_review_workspace(job: dict) -> None:
                     with st.expander("顯示完整頁", expanded=False):
                         if note_candidates:
                             with Image.open(io.BytesIO(full_image)) as rendered_full:
-                                full_click = streamlit_image_coordinates(
+                                full_click = zoomable_image_coordinates(
                                     rendered_full.copy(),
-                                    use_column_width="always",
                                     key=(
                                         f"review_click_full_page_"
                                         f"{current['review_key']}"
                                     ),
                                     cursor="crosshair",
+                                    max_height=560,
                                 )
                             full_geometry = {
                                 "left": 0,
@@ -1570,7 +1575,6 @@ def _render_review_workspace(job: dict) -> None:
                                 manual_start_key=manual_start_key,
                                 manual_end_key=manual_end_key,
                                 feedback_key=feedback_key,
-                                is_span=is_span,
                             ):
                                 st.rerun()
                             st.caption(
@@ -1599,6 +1603,15 @@ def _render_review_workspace(job: dict) -> None:
                 else note_candidates[int(selected_candidate_key) - 1]
             )
             st.caption("選橘色編號即可更正，不需要自己查 note ID。")
+            if selected_candidate is not None:
+                _selected_ids, selected_id_uncertain = _certain_endpoint_note_ids(
+                    [selected_candidate]
+                )
+                if selected_id_uncertain:
+                    st.warning(
+                        "這顆音沒有唯一的 BPSD note ID；可保存音頭更正，但 note ID "
+                        "會留空。"
+                    )
         elif not is_span and outside_xml_scope:
             st.warning(
                 "這一頁不在上傳的 MusicXML／BPSD 範圍內，不能用圖片選音頭。"
@@ -1617,6 +1630,8 @@ def _render_review_workspace(job: dict) -> None:
                 f"{current.get('xml_staff') or '—'}"
             )
 
+        selected_note_ids = []
+        endpoint_ids_uncertain = False
         with st.expander(
             "進階：輸入開始／結束音符，或修改時間、staff、class", expanded=is_span
         ):
@@ -1660,8 +1675,72 @@ def _render_review_workspace(job: dict) -> None:
                     "`52, 上, C4, 1 ; 52, 上, E4, 2 ; 52, 上, G4, 3`；"
                     "清空代表不確定並留空。"
                 )
-                start_note = _candidate_note_id(start_endpoint)
-                end_note = _candidate_note_id(end_endpoint)
+                start_note_ids, start_ids_uncertain = _certain_endpoint_note_ids(
+                    start_endpoints
+                )
+                end_note_ids, end_ids_uncertain = _certain_endpoint_note_ids(
+                    end_endpoints
+                )
+                endpoint_ids_uncertain = start_ids_uncertain or end_ids_uncertain
+                endpoints_complete = bool(start_endpoints and end_endpoints)
+                ids_exportable = endpoints_complete and not endpoint_ids_uncertain
+                selected_note_ids = (
+                    list(dict.fromkeys([*start_note_ids, *end_note_ids]))
+                    if ids_exportable
+                    else []
+                )
+                start_note = start_note_ids[0] if ids_exportable else ""
+                end_note = end_note_ids[0] if ids_exportable else ""
+                if endpoint_ids_uncertain:
+                    st.warning(
+                        "所選音頭沒有唯一的 BPSD note ID（可能是同時間、同音高的 "
+                        "unison，或 BPSD 中沒有這顆音）。時間與音頭仍可保存，但所有 "
+                        "note ID 欄位會留空，不會猜測。"
+                    )
+                elif not endpoints_complete and (start_endpoints or end_endpoints):
+                    st.info(
+                        "請同時選好開始與結束音符；完成前 note ID 不會寫入最終 CSV。"
+                    )
+                start_ids_key = (
+                    f"workspace_start_note_ids_{current['review_key']}"
+                )
+                end_ids_key = f"workspace_end_note_ids_{current['review_key']}"
+                st.session_state[start_ids_key] = json.dumps(
+                    [
+                        int(note_id) if str(note_id).isdigit() else note_id
+                        for note_id in start_note_ids
+                    ],
+                    ensure_ascii=False,
+                )
+                st.session_state[end_ids_key] = json.dumps(
+                    [
+                        int(note_id) if str(note_id).isdigit() else note_id
+                        for note_id in end_note_ids
+                    ],
+                    ensure_ascii=False,
+                )
+                id_left, id_right = st.columns(2)
+                id_left.text_input(
+                    "開始 note IDs（自動）",
+                    key=start_ids_key,
+                    disabled=True,
+                )
+                id_right.text_input(
+                    "結束 note IDs（自動）",
+                    key=end_ids_key,
+                    disabled=True,
+                )
+                connected_note = (
+                    json.dumps(
+                        [
+                            int(note_id) if str(note_id).isdigit() else note_id
+                            for note_id in selected_note_ids
+                        ],
+                        ensure_ascii=False,
+                    )
+                    if selected_note_ids
+                    else ""
+                )
                 start_choice = start_input
                 end_choice = end_input
             else:
@@ -1681,6 +1760,7 @@ def _render_review_workspace(job: dict) -> None:
                     value=current_end_note,
                     key=f"workspace_end_note_{current['review_key']}",
                 )
+                connected_note = ""
             field_left, field_middle = st.columns(2)
             start_meas = field_left.text_input(
                 "開始時間",
@@ -1705,13 +1785,25 @@ def _render_review_workspace(job: dict) -> None:
                 value=str(saved.get("staff", current.get("xml_staff", ""))),
                 key=f"workspace_staff_{current['review_key']}",
             )
-            connected_note = st.text_input(
-                "Connected note IDs",
-                value=str(
-                    saved.get("connected_note", current.get("connected_note", ""))
-                ),
-                key=f"workspace_connected_{current['review_key']}",
-            )
+            connected_key = f"workspace_connected_{current['review_key']}"
+            if note_candidates:
+                st.session_state[connected_key] = connected_note
+                st.text_input(
+                    "Connected note IDs（自動）",
+                    key=connected_key,
+                    disabled=True,
+                    help="自動合併開始端與結束端所選的全部 note IDs。",
+                )
+            else:
+                connected_note = st.text_input(
+                    "Connected note IDs",
+                    value=str(
+                        saved.get(
+                            "connected_note", current.get("connected_note", "")
+                        )
+                    ),
+                    key=connected_key,
+                )
             corrected_class_id = st.text_input(
                 "更正後 class ID",
                 value=str(saved.get("corrected_class_id", current.get("class_id", ""))),
@@ -1730,12 +1822,11 @@ def _render_review_workspace(job: dict) -> None:
 
     def save_decision(action: str, note_candidate: dict | None = None) -> None:
         corrected_target = note_candidate or {}
-        corrected_note_id = _candidate_note_id(corrected_target)
-        selected_endpoint_ids = [
-            _candidate_note_id(candidate)
-            for candidate in [*start_endpoints, *end_endpoints]
-            if _candidate_note_id(candidate)
-        ]
+        corrected_ids, corrected_ids_uncertain = _certain_endpoint_note_ids(
+            [corrected_target] if note_candidate is not None else []
+        )
+        corrected_note_id = corrected_ids[0] if corrected_ids else ""
+        selected_endpoint_ids = selected_note_ids
         if action == "confirm" and note_candidate is None:
             decision_start_note = str(current.get("start_note", ""))
             decision_end_note = str(current.get("end_note", ""))
@@ -1743,6 +1834,18 @@ def _render_review_workspace(job: dict) -> None:
             corrected_end = str(current.get("end_meas", ""))
             corrected_staff = str(current.get("xml_staff", ""))
             corrected_connected = str(current.get("connected_note", ""))
+            machine_endpoints = [
+                candidate
+                for candidate in (current_start_candidate, current_end_candidate)
+                if candidate is not None
+            ]
+            _machine_ids, machine_ids_uncertain = _certain_endpoint_note_ids(
+                machine_endpoints
+            )
+            if machine_ids_uncertain:
+                decision_start_note = ""
+                decision_end_note = ""
+                corrected_connected = ""
         else:
             decision_start_note = corrected_note_id or start_note
             decision_end_note = corrected_note_id or end_note
@@ -1752,6 +1855,10 @@ def _render_review_workspace(job: dict) -> None:
             corrected_connected = str(
                 corrected_target.get("connected_note", connected_note)
             )
+            if corrected_ids_uncertain:
+                decision_start_note = ""
+                decision_end_note = ""
+                corrected_connected = ""
         decisions[current["review_key"]] = {
             "action": action,
             "page_id": str(current.get("page_id", "")),

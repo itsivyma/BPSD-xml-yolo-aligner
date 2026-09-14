@@ -260,7 +260,7 @@ def _pitch_midi(pitch: ET.Element) -> tuple[int, str, int]:
         "B": 11,
     }[step]
     midi = (octave + 1) * 12 + semitone + alter
-    accidental = "#" if alter == 1 else "b" if alter == -1 else ""
+    accidental = "#" * alter if alter > 0 else "b" * (-alter) if alter < 0 else ""
     return midi, f"{step}{accidental}{octave}", octave * 7 + "CDEFGAB".index(step)
 
 
@@ -1614,6 +1614,9 @@ def attach_review_note_candidates(
             candidates.append(
                 {
                     "note_id": note_id,
+                    "note_id_ambiguous": bool(
+                        note.get("note_id_ambiguous", False)
+                    ),
                     "start_meas": f"{float(time):.3f}" if time is not None else "",
                     "end_meas": f"{float(time):.3f}" if time is not None else "",
                     "connected_note": json.dumps(

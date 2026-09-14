@@ -244,6 +244,7 @@ def test_span_review_candidates_include_all_page_systems_and_xml_only_notes():
     notes = [
         {
             "note_id": 10,
+            "note_id_ambiguous": True,
             "xml_note_sequence": 1,
             "system": 1,
             "staff": 1,
@@ -275,6 +276,8 @@ def test_span_review_candidates_include_all_page_systems_and_xml_only_notes():
     assert {candidate["xml_measure"] for candidate in candidates} == {2, 8}
     xml_only = next(candidate for candidate in candidates if candidate["note_id"] is None)
     assert xml_only["connected_note"] == "[]"
+    bps_candidate = next(candidate for candidate in candidates if candidate["note_id"] == 10)
+    assert bps_candidate["note_id_ambiguous"] is True
 
 
 def test_note_pixel_position_uses_measure_local_piecewise_mapping():
@@ -1108,6 +1111,29 @@ def test_parse_musicxml_page_supports_default_namespace(tmp_path):
     assert page["notes"][0]["pitch_name"] == "C4"
     assert page["notes"][0]["slur_marks"] == [
         {"type": "start", "number": "1", "orientation": ""}
+    ]
+
+
+def test_parse_musicxml_page_preserves_double_accidentals(tmp_path):
+    xml_path = tmp_path / "double-accidentals.xml"
+    xml_path.write_text(
+        """<?xml version="1.0"?>
+<score-partwise><part-list><score-part id="P1"><part-name>Piano</part-name>
+</score-part></part-list><part id="P1"><measure number="1" width="100">
+<attributes><divisions>1</divisions></attributes>
+<note default-x="10"><pitch><step>C</step><alter>2</alter><octave>5</octave></pitch>
+<duration>1</duration><staff>1</staff></note>
+<note default-x="20"><pitch><step>E</step><alter>-2</alter><octave>4</octave></pitch>
+<duration>1</duration><staff>1</staff></note>
+</measure></part></score-partwise>""",
+        encoding="utf-8",
+    )
+
+    page = parse_musicxml_page(xml_path, page_number=1)
+
+    assert [(note["midi"], note["pitch_name"]) for note in page["notes"]] == [
+        (74, "C##5"),
+        (62, "Ebb4"),
     ]
 
 

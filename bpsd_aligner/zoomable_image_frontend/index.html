@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="./streamlit-component-lib.js"></script>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <div id="toolbar" aria-label="圖片縮放控制">
+      <button id="zoom-out" type="button" title="縮小">−</button>
+      <input id="zoom-range" type="range" min="50" max="400" step="10" value="100" aria-label="圖片縮放">
+      <button id="zoom-in" type="button" title="放大">＋</button>
+      <button id="zoom-reset" type="button">重設</button>
+      <span id="zoom-label">100%</span>
+      <span id="zoom-help">觸控板捏合或 Ctrl/⌘＋滾輪</span>
+    </div>
+    <div id="viewport">
+      <img id="image" draggable="false" alt="可縮放的樂譜複核圖片">
+    </div>
+    <script src="./main.js"></script>
+  </body>
+</html>

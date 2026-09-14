@@ -15,7 +15,6 @@ dependencies = [
   "pymupdf>=1.26,<2.0",
   "pypdf>=6.15,<7.0",
   "streamlit>=1.40,<2.0",
-  "streamlit-image-coordinates>=0.4,<0.5",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +25,9 @@ bpsd-aligner = "bpsd_aligner.cli:main"
 
 [tool.setuptools]
 packages = ["bpsd_aligner"]
+
+[tool.setuptools.package-data]
+bpsd_aligner = ["zoomable_image_frontend/*.html", "zoomable_image_frontend/*.js", "zoomable_image_frontend/*.css"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

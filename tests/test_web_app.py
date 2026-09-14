@@ -247,8 +247,45 @@ def test_completed_job_exposes_human_review_editor_and_apply_button():
     assert selector.value == "page-01:Y2"
     assert any(field.label == "開始音符（可複選）" for field in result.text_input)
     assert any(field.label == "結束音符（可複選）" for field in result.text_input)
+    assert any(field.label == "開始 note IDs（自動）" for field in result.text_input)
+    assert any(field.label == "結束 note IDs（自動）" for field in result.text_input)
+    assert any(
+        field.label == "Connected note IDs（自動）" for field in result.text_input
+    )
     assert not any(item.label == "開始音符" for item in result.selectbox)
     assert not any(item.label == "結束音符" for item in result.selectbox)
+
+    start_endpoint_input = next(
+        field for field in result.text_input if field.label == "開始音符（可複選）"
+    )
+    result = start_endpoint_input.input("3, 上, E4, 1").run(timeout=15)
+    assert not result.exception
+    start_ids = next(
+        field for field in result.text_input if field.label == "開始 note IDs（自動）"
+    )
+    end_ids = next(
+        field for field in result.text_input if field.label == "結束 note IDs（自動）"
+    )
+    connected_ids = next(
+        field
+        for field in result.text_input
+        if field.label == "Connected note IDs（自動）"
+    )
+    assert start_ids.value == "[31]"
+    assert end_ids.value == "[]"
+    assert connected_ids.value == ""
+
+    end_endpoint_input = next(
+        field for field in result.text_input if field.label == "結束音符（可複選）"
+    )
+    result = end_endpoint_input.input("3, 上, E4, 1").run(timeout=15)
+    assert not result.exception
+    connected_ids = next(
+        field
+        for field in result.text_input
+        if field.label == "Connected note IDs（自動）"
+    )
+    assert connected_ids.value == "[31]"
 
     note_selector = next(
         item

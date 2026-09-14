@@ -1,6 +1,7 @@
 import json
 
 from bpsd_aligner.review_workspace import (
+    certain_endpoint_note_ids,
     endpoint_note_input_values,
     fill_missing_note_orders,
     merge_page_note_candidates,
@@ -172,3 +173,46 @@ def test_end_endpoint_can_select_multiple_notes_without_overwriting_start():
     resolved_end, end_error = resolve_endpoint_note_inputs(end_value, end_candidates)
     assert end_error == ""
     assert [candidate["note_id"] for candidate in resolved_end] == [21, 23]
+
+
+def test_start_endpoint_selection_never_populates_or_overwrites_end():
+    start_candidate = {
+        "printed_measure": 10,
+        "start_meas": 9.0,
+        "staff": 1,
+        "pitch": "C4",
+        "measure_note_order": 1,
+        "note_id": 10,
+    }
+    end_candidate = {
+        "printed_measure": 11,
+        "start_meas": 10.0,
+        "staff": 1,
+        "pitch": "G4",
+        "measure_note_order": 1,
+        "note_id": 20,
+    }
+    original_end = endpoint_note_input_values([end_candidate])
+
+    start_value, end_value, added = toggle_endpoint_selection(
+        role="start",
+        start_value="",
+        end_value=original_end,
+        candidate=start_candidate,
+        start_candidates=[start_candidate],
+        end_candidates=[end_candidate],
+    )
+
+    assert added is True
+    assert start_value == endpoint_note_input_values([start_candidate])
+    assert end_value == original_end
+
+
+def test_uncertain_endpoint_note_ids_stay_blank():
+    exact = {"note_id": 10, "note_id_ambiguous": False}
+    ambiguous = {"note_id": 11, "note_id_ambiguous": True}
+    xml_only = {"note_id": None, "note_id_ambiguous": False}
+
+    assert certain_endpoint_note_ids([exact]) == (["10"], False)
+    assert certain_endpoint_note_ids([exact, ambiguous]) == ([], True)
+    assert certain_endpoint_note_ids([xml_only]) == ([], True)
