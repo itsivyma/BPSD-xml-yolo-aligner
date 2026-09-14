@@ -12,9 +12,11 @@ let maxZoom = 4;
 let maxHeight = 520;
 let cursor = "crosshair";
 let baseScale = 1;
+let stateKey = "";
 let touchStartDistance = null;
 let touchStartZoom = 1;
 let suppressClickUntil = 0;
+let saveFrame = null;
 
 function clamp(value, low, high) {
   return Math.min(high, Math.max(low, value));
@@ -46,6 +48,57 @@ function layout() {
   );
 }
 
+function storageKey() {
+  return stateKey ? `bpsd-zoomable-image:${stateKey}` : "";
+}
+
+function loadViewState() {
+  const key = storageKey();
+  if (!key) return null;
+  try {
+    const saved = JSON.parse(window.sessionStorage.getItem(key));
+    if (!saved || !Number.isFinite(saved.zoom)) return null;
+    return {
+      zoom: saved.zoom,
+      scrollLeft: Number.isFinite(saved.scrollLeft) ? saved.scrollLeft : 0,
+      scrollTop: Number.isFinite(saved.scrollTop) ? saved.scrollTop : 0
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function saveViewState() {
+  const key = storageKey();
+  if (!key) return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify({
+      zoom: zoom,
+      scrollLeft: viewport.scrollLeft,
+      scrollTop: viewport.scrollTop
+    }));
+  } catch (_error) {
+    // Storage can be disabled without affecting the image viewer itself.
+  }
+}
+
+function scheduleViewStateSave() {
+  if (saveFrame !== null) return;
+  saveFrame = window.requestAnimationFrame(() => {
+    saveFrame = null;
+    saveViewState();
+  });
+}
+
+function restoreViewState(saved) {
+  layout();
+  window.requestAnimationFrame(() => {
+    viewport.scrollLeft = saved ? saved.scrollLeft : 0;
+    viewport.scrollTop = saved ? saved.scrollTop : 0;
+    saveViewState();
+  });
+}
+
 function setZoom(nextZoom, clientX = null, clientY = null) {
   if (!image.naturalWidth) return;
   const oldRect = image.getBoundingClientRect();
@@ -63,6 +116,7 @@ function setZoom(nextZoom, clientX = null, clientY = null) {
   const newRect = image.getBoundingClientRect();
   viewport.scrollLeft += imageFractionX * newRect.width - localX - viewport.scrollLeft;
   viewport.scrollTop += imageFractionY * newRect.height - localY - viewport.scrollTop;
+  saveViewState();
 }
 
 function pointerDistance(first, second) {
@@ -112,6 +166,8 @@ viewport.addEventListener("touchend", () => {
   touchStartDistance = null;
 }, {passive: true});
 
+viewport.addEventListener("scroll", scheduleViewStateSave, {passive: true});
+
 range.addEventListener("input", () => setZoom(Number(range.value) / 100));
 zoomIn.addEventListener("click", () => setZoom(zoom + 0.25));
 zoomOut.addEventListener("click", () => setZoom(zoom - 0.25));
@@ -124,11 +180,13 @@ Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, (event) => {
   maxZoom = Number(args.max_zoom || 4);
   maxHeight = Number(args.max_height || 520);
   cursor = args.cursor || "crosshair";
+  stateKey = String(args.state_key || "");
   range.min = String(Math.round(minZoom * 100));
   range.max = String(Math.round(maxZoom * 100));
   if (image.src !== args.src) {
-    zoom = 1;
-    image.onload = layout;
+    const saved = loadViewState();
+    zoom = clamp(saved ? saved.zoom : 1, minZoom, maxZoom);
+    image.onload = () => restoreViewState(saved);
     image.src = args.src;
   } else {
     layout();

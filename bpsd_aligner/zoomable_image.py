@@ -46,6 +46,7 @@ def zoomable_image_coordinates(
 
     return _component(
         src=_image_data_url(source),
+        state_key=key,
         cursor=cursor,
         max_height=max(180, int(max_height)),
         min_zoom=0.5,
