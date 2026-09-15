@@ -216,6 +216,66 @@ def test_attach_review_note_candidates_orders_nearby_notes_and_keeps_metadata():
     assert candidates[0]["measure_note_order"] == 1
 
 
+def test_point_candidate_limit_keeps_every_note_in_selected_chord():
+    systems = [
+        SystemGeometry(
+            number=1,
+            upper=StaffGeometry(
+                center=100, line_spacing=10, lines=[80, 90, 100, 110, 120]
+            ),
+            lower=StaffGeometry(
+                center=250, line_spacing=10, lines=[230, 240, 250, 260, 270]
+            ),
+            x_left=100,
+            x_right=900,
+        )
+    ]
+    rows = [{"system": "1", "x": "0.50", "y": "0.25"}]
+    notes = [
+        {
+            "note_id": 1,
+            "xml_note_sequence": 1,
+            "system": 1,
+            "staff": 1,
+            "x_norm": 0.5,
+            "bps_time": 1.0,
+            "xml_measure": 1,
+            "pitch_name": "E4",
+            "diatonic": 30,
+            "clef": {"sign": "G", "line": 2},
+        },
+        {
+            "note_id": 2,
+            "xml_note_sequence": 2,
+            "system": 1,
+            "staff": 2,
+            "x_norm": 0.5,
+            "bps_time": 1.0,
+            "xml_measure": 1,
+            "pitch_name": "E2",
+            "diatonic": 16,
+            "clef": {"sign": "F", "line": 4},
+        },
+        {
+            "note_id": 3,
+            "xml_note_sequence": 3,
+            "system": 1,
+            "staff": 1,
+            "x_norm": 0.55,
+            "bps_time": 1.5,
+            "xml_measure": 1,
+            "pitch_name": "F4",
+            "diatonic": 31,
+            "clef": {"sign": "G", "line": 2},
+        },
+    ]
+
+    attach_review_note_candidates(rows, notes, systems, 1000, 400, limit=1)
+    candidates = json.loads(rows[0]["review_note_candidates_json"])
+
+    assert [candidate["note_id"] for candidate in candidates] == [1, 2]
+
+
 def test_span_review_candidates_include_all_page_systems_and_xml_only_notes():
     systems = [
         SystemGeometry(

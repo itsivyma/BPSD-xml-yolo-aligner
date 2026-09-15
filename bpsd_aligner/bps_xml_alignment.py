@@ -1657,11 +1657,30 @@ def attach_review_note_candidates(
                 candidate["y_px"],
             )
         )
-        selected_candidates = (
-            candidates
-            if str(row.get("target_type", "")) == "span"
-            else candidates[:limit]
-        )
+        if str(row.get("target_type", "")) == "span":
+            selected_candidates = candidates
+        else:
+            initially_selected = candidates[:limit]
+
+            def chord_key(candidate: dict) -> tuple[str, str, str]:
+                measure = str(candidate.get("xml_measure", ""))
+                time = str(candidate.get("start_meas", "")).strip()
+                if time:
+                    return "time", measure, time
+                return "x", measure, f"{float(candidate['x_px']):.1f}"
+
+            selected_chords = {
+                chord_key(candidate) for candidate in initially_selected
+            }
+            # A hard candidate limit must never split a chord. Otherwise a
+            # lower or outer notehead at the same onset is visible but cannot
+            # be selected in Review merely because it ranked just after the
+            # cutoff.
+            selected_candidates = [
+                candidate
+                for candidate in candidates
+                if chord_key(candidate) in selected_chords
+            ]
         row["review_note_candidates_json"] = json.dumps(
             selected_candidates,
             ensure_ascii=False,

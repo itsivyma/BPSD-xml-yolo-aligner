@@ -40,8 +40,9 @@ def zoomable_image_coordinates(
     """Show one independently zoomable image and return original-pixel clicks.
 
     The viewer supports its own controls, Ctrl/Cmd + wheel, and the pinch
-    gesture emitted by macOS trackpads.  Returned width and height always
-    describe the original image, so downstream note snapping is zoom-invariant.
+    gesture emitted by macOS trackpads.  Click coordinates and dimensions are
+    returned in rendered CSS pixels so the snapping tolerance remains a visual
+    screen distance at every zoom level.
     """
 
     return _component(

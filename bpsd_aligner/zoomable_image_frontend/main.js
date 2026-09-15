@@ -127,13 +127,11 @@ image.addEventListener("click", (event) => {
   if (Date.now() < suppressClickUntil) return;
   const rect = image.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
-  const x = (event.clientX - rect.left) * image.naturalWidth / rect.width;
-  const y = (event.clientY - rect.top) * image.naturalHeight / rect.height;
   Streamlit.setComponentValue({
-    x: x,
-    y: y,
-    width: image.naturalWidth,
-    height: image.naturalHeight,
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
+    width: rect.width,
+    height: rect.height,
     unix_time: Date.now()
   });
 });

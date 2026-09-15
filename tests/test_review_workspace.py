@@ -40,6 +40,33 @@ def test_review_note_input_and_click_resolution_are_pure():
     assert distance == 0
 
 
+def test_click_tolerance_is_measured_in_rendered_pixels_after_zoom():
+    candidate = {"note_id": 27, "x_px": 785.6, "y_px": 458.6}
+    geometry = {"left": 0, "top": 220, "width": 1750, "height": 455}
+    rendered_width = 1267
+    rendered_height = 329
+    candidate_x = candidate["x_px"] * rendered_width / geometry["width"]
+    candidate_y = (
+        (candidate["y_px"] - geometry["top"])
+        * rendered_height
+        / geometry["height"]
+    )
+
+    clicked, distance = snap_click_to_note_candidate(
+        {
+            "x": candidate_x + 40,
+            "y": candidate_y,
+            "width": rendered_width,
+            "height": rendered_height,
+        },
+        [candidate],
+        geometry,
+    )
+
+    assert clicked == candidate
+    assert distance == 40
+
+
 def test_merge_page_candidates_deduplicates_legacy_rows():
     candidate = {
         "xml_note_sequence": 7,
